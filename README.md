@@ -249,7 +249,7 @@ multiple_sounds("UBBG Dark 2", resultfile = "UBBG Dark 2 NDSI.csv",
 install.packages("lmerTest")
 library(lmerTest)
 
-data <- read.table("Light pollution GLMM.txt", header=T, sep = "\t")
+data <- read.table("Light pollution data.txt", header=T, sep = "\t")
 head(data)
 data$Site <- as.factor(data$Site)
 
