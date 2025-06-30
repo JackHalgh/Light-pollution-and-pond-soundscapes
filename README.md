@@ -1,10 +1,19 @@
 # Light-pollution-and-pond-soundscapes
+
+```
 #By Jack A. Greenhalgh, 30th June, 2025.
 #Department of Biology, McGill University, 1205 Dr Penfield Ave, Montreal, Quebec, H3A 1B1, Canada.
 
-```
+# Load required packages
 library(corrplot)
 library(caret)
+library(car)   
+library(dplyr)
+library(purrr)
+library(FSA)     
+library(tidyr)
+library(ggplot2)
+library(forcats)
 
 #### Loading, cleaning, and scaling data ####
 
@@ -22,6 +31,7 @@ numeric_data <- data[, 4:63]
 
 # Compute correlation matrix
 cor_matrix <- cor(numeric_data, use = "complete.obs")
+help(cor)
 
 # Plot correlation matrix
 corrplot(cor_matrix, method = "color", type = "upper", 
@@ -51,10 +61,30 @@ summary(filtered_data_z)
 filtered_data_z <- cbind(site_treatment, filtered_data_z)
 head(filtered_data_z)
 
-#### Testing for equal or non-equal variance between treatment groups ####
+##### Testing for normality #####
 
-library(car)   
-library(dplyr)
+# Identify numeric variables
+numeric_vars <- sapply(filtered_data_z, is.numeric)
+
+# Apply Shapiro-Wilk test to each numeric variable
+shapiro_results <- sapply(filtered_data_z[, numeric_vars], function(x) {
+  if (length(unique(x)) >= 3) {
+    shapiro.test(x)$p.value
+  } else {
+    NA  # Too few unique values for test
+  }
+})
+
+# Format into a dataframe
+shapiro_df <- data.frame(
+  Variable = names(shapiro_results),
+  Shapiro_p_value = shapiro_results,
+  Normality = ifelse(shapiro_results > 0.05, "Yes", "No")
+)
+
+print(shapiro_df)
+
+#### Testing for equal or unequal variance between treatment groups ####
 
 # Ensure Treatment is a factor
 filtered_data_z$Treatment <- as.factor(filtered_data_z$Treatment)
@@ -81,36 +111,7 @@ levene_results_df <- do.call(rbind, levene_results)
 # View results
 print(levene_results_df)
 
-##### Testing for normality #####
-
-# Identify numeric variables
-numeric_vars <- sapply(filtered_data_z, is.numeric)
-
-# Apply Shapiro-Wilk test to each numeric variable
-shapiro_results <- sapply(filtered_data_z[, numeric_vars], function(x) {
-  if (length(unique(x)) >= 3) {
-    shapiro.test(x)$p.value
-  } else {
-    NA  # Too few unique values for test
-  }
-})
-
-# Format into a dataframe
-shapiro_df <- data.frame(
-  Variable = names(shapiro_results),
-  Shapiro_p_value = shapiro_results,
-  Normality = ifelse(shapiro_results > 0.05, "Yes", "No")
-)
-
-print(shapiro_df)
-
 #### Kruskal-Wallis for Each Variable by Treatment within Site #####
-
-# Required libraries
-library(dplyr)
-library(purrr)
-library(FSA)      # For dunnTest
-library(tidyr)
 
 # Normalize Treatment names completely (optional)
 filtered_data_z <- filtered_data_z %>%
@@ -193,10 +194,6 @@ print(posthoc_results)
 write.csv(posthoc_results, "posthoc_results.csv")
 
 ##### Heat map of key variables #####
-
-library(dplyr)
-library(ggplot2)
-library(forcats)
 
 # Prepare data
 df <- posthoc_results %>%
