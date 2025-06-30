@@ -232,3 +232,11 @@ ggplot(df, aes(x = Comparison, y = Variable, fill = Z)) +
   )
 ```
 
+# Heat map of acoustic indices (1 kHz - 10 kHz) 
+
+[Heat map (10 kHz).pdf](https://github.com/user-attachments/files/20986226/Heat.map.10.kHz.pdf)
+
+# Heat map of acoustic indices (1 kHz - 24 kHz) 
+
+[Heat map (24 kHz).pdf](https://github.com/user-attachments/files/20986238/Heat.map.24.kHz.pdf)
+
