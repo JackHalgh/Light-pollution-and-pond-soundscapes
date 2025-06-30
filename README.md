@@ -1,323 +1,237 @@
 # Light-pollution-and-pond-soundscapes
+#By Jack A. Greenhalgh, 30th June, 2025.
+#Department of Biology, McGill University, 1205 Dr Penfield Ave, Montreal, Quebec, H3A 1B1, Canada.
 
 ```
-#Calculate acoustic indices 
+library(corrplot)
+library(caret)
 
-####OSP####
+#### Loading, cleaning, and scaling data ####
 
-#Dark 1 
-
-multiple_sounds("OSP Dark 1", resultfile = "OSP Dark 1 ACI.csv",
-                soundindex = "acoustic_complexity")
-
-multiple_sounds("OSP Dark 1", resultfile = "OSP Dark 1 ADI.csv",
-                soundindex = "acoustic_diversity")
-
-multiple_sounds("OSP Dark 1", resultfile = "OSP Dark 1 AEI.csv",
-                soundindex = "acoustic_evenness")
-
-multiple_sounds("OSP Dark 1", resultfile = "OSP Dark 1 BI.csv",
-                soundindex = "bioacoustic_index")
-
-multiple_sounds("OSP Dark 1", resultfile = "OSP Dark 1 H.csv",
-                soundindex = "H")
-
-multiple_sounds("OSP Dark 1", resultfile = "OSP Dark 1 NDSI.csv",
-                soundindex = "ndsi")
-
-#Light 1
-
-multiple_sounds("OSP Light 1", resultfile = "OSP Light 1 ACI.csv",
-                soundindex = "acoustic_complexity")
-
-multiple_sounds("OSP Light 1", resultfile = "OSP Light 1 ADI.csv",
-                soundindex = "acoustic_diversity")
-
-multiple_sounds("OSP Light 1", resultfile = "OSP Light 1 AEI.csv",
-                soundindex = "acoustic_evenness")
-
-multiple_sounds("OSP Light 1", resultfile = "OSP Light 1 BI.csv",
-                soundindex = "bioacoustic_index")
-
-multiple_sounds("OSP Light 1", resultfile = "OSP Light 1 H.csv",
-                soundindex = "H")
-
-multiple_sounds("OSP Light 1", resultfile = "OSP Light 1 NDSI.csv",
-                soundindex = "ndsi")
-
-#Dark 2
-multiple_sounds("OSP Dark 2", resultfile = "OSP Dark 2 ACI.csv",
-                soundindex = "acoustic_complexity")
-
-multiple_sounds("OSP Dark 2", resultfile = "OSP Dark 2 ADI.csv",
-                soundindex = "acoustic_diversity")
-
-multiple_sounds("OSP Dark 2", resultfile = "OSP Dark 2 AEI.csv",
-                soundindex = "acoustic_evenness")
-
-multiple_sounds("OSP Dark 2", resultfile = "OSP Dark 2 BI.csv",
-                soundindex = "bioacoustic_index")
-
-multiple_sounds("OSP Dark 2", resultfile = "OSP Dark 2 H.csv",
-                soundindex = "H")
-
-multiple_sounds("OSP Dark 2", resultfile = "OSP Dark 2 NDSI.csv",
-                soundindex = "ndsi")
-####EWF####
-
-#Dark 1 
-
-multiple_sounds("EWF Dark 1", resultfile = "EWF Dark 1 ACI.csv",
-                soundindex = "acoustic_complexity")
-
-multiple_sounds("EWF Dark 1", resultfile = "EWF Dark 1 ADI.csv",
-                soundindex = "acoustic_diversity")
-
-multiple_sounds("EWF Dark 1", resultfile = "EWF Dark 1 AEI.csv",
-                soundindex = "acoustic_evenness")
-
-multiple_sounds("EWF Dark 1", resultfile = "EWF Dark 1 BI.csv",
-                soundindex = "bioacoustic_index")
-
-multiple_sounds("EWF Dark 1", resultfile = "EWF Dark 1 H.csv",
-                soundindex = "H")
-
-multiple_sounds("EWF Dark 1", resultfile = "EWF Dark 1 NDSI.csv",
-                soundindex = "ndsi")
-
-#Light 1
-
-multiple_sounds("EWF Light 1", resultfile = "EWF Light 1 ACI.csv",
-                soundindex = "acoustic_complexity")
-
-multiple_sounds("EWF Light 1", resultfile = "EWF Light 1 ADI.csv",
-                soundindex = "acoustic_diversity")
-
-multiple_sounds("EWF Light 1", resultfile = "EWF Light 1 AEI.csv",
-                soundindex = "acoustic_evenness")
-
-multiple_sounds("EWF Light 1", resultfile = "EWF Light 1 BI.csv",
-                soundindex = "bioacoustic_index")
-
-multiple_sounds("EWF Light 1", resultfile = "EWF Light 1 H.csv",
-                soundindex = "H")
-
-multiple_sounds("EWF Light 1", resultfile = "EWF Light 1 NDSI.csv",
-                soundindex = "ndsi")
-
-#Dark 2
-multiple_sounds("EWF Dark 2", resultfile = "EWF Dark 2 ACI.csv",
-                soundindex = "acoustic_complexity")
-
-multiple_sounds("EWF Dark 2", resultfile = "EWF Dark 2 ADI.csv",
-                soundindex = "acoustic_diversity")
-
-multiple_sounds("EWF Dark 2", resultfile = "EWF Dark 2 AEI.csv",
-                soundindex = "acoustic_evenness")
-
-multiple_sounds("EWF Dark 2", resultfile = "EWF Dark 2 BI.csv",
-                soundindex = "bioacoustic_index")
-
-multiple_sounds("EWF Dark 2", resultfile = "EWF Dark 2 H.csv",
-                soundindex = "H")
-
-multiple_sounds("EWF Dark 2", resultfile = "EWF Dark 2 NDSI.csv",
-                soundindex = "ndsi")
-
-####FWF####
-
-#Dark 1 
-
-multiple_sounds("FWF Dark 1", resultfile = "FWF Dark 1 ACI.csv",
-                soundindex = "acoustic_complexity")
-
-multiple_sounds("FWF Dark 1", resultfile = "FWF Dark 1 ADI.csv",
-                soundindex = "acoustic_diversity")
-
-multiple_sounds("FWF Dark 1", resultfile = "FWF Dark 1 AEI.csv",
-                soundindex = "acoustic_evenness")
-
-multiple_sounds("FWF Dark 1", resultfile = "FWF Dark 1 BI.csv",
-                soundindex = "bioacoustic_index")
-
-multiple_sounds("FWF Dark 1", resultfile = "FWF Dark 1 H.csv",
-                soundindex = "H")
-
-multiple_sounds("FWF Dark 1", resultfile = "FWF Dark 1 NDSI.csv",
-                soundindex = "ndsi")
-
-#Light 1
-
-multiple_sounds("FWF Light 1", resultfile = "FWF Light 1 ACI.csv",
-                soundindex = "acoustic_complexity")
-
-multiple_sounds("FWF Light 1", resultfile = "FWF Light 1 ADI.csv",
-                soundindex = "acoustic_diversity")
-
-multiple_sounds("FWF Light 1", resultfile = "FWF Light 1 AEI.csv",
-                soundindex = "acoustic_evenness")
-
-multiple_sounds("FWF Light 1", resultfile = "FWF Light 1 BI.csv",
-                soundindex = "bioacoustic_index")
-
-multiple_sounds("FWF Light 1", resultfile = "FWF Light 1 H.csv",
-                soundindex = "H")
-
-multiple_sounds("FWF Light 1", resultfile = "FWF Light 1 NDSI.csv",
-                soundindex = "ndsi")
-
-#Dark 2
-multiple_sounds("FWF Dark 2", resultfile = "FWF Dark 2 ACI.csv",
-                soundindex = "acoustic_complexity")
-
-multiple_sounds("FWF Dark 2", resultfile = "FWF Dark 2 ADI.csv",
-                soundindex = "acoustic_diversity")
-
-multiple_sounds("FWF Dark 2", resultfile = "FWF Dark 2 AEI.csv",
-                soundindex = "acoustic_evenness")
-
-multiple_sounds("FWF Dark 2", resultfile = "FWF Dark 2 BI.csv",
-                soundindex = "bioacoustic_index")
-
-multiple_sounds("FWF Dark 2", resultfile = "FWF Dark 2 H.csv",
-                soundindex = "H")
-
-multiple_sounds("FWF Dark 2", resultfile = "FWF Dark 2 NDSI.csv",
-                soundindex = "ndsi")
-
-####UBBG####
-
-#Dark 1 
-
-multiple_sounds("UBBG Dark 1", resultfile = "UBBG Dark 1 ACI.csv",
-                soundindex = "acoustic_complexity")
-
-multiple_sounds("UBBG Dark 1", resultfile = "UBBG Dark 1 ADI.csv",
-                soundindex = "acoustic_diversity")
-
-multiple_sounds("UBBG Dark 1", resultfile = "UBBG Dark 1 AEI.csv",
-                soundindex = "acoustic_evenness")
-
-multiple_sounds("UBBG Dark 1", resultfile = "UBBG Dark 1 BI.csv",
-                soundindex = "bioacoustic_index")
-
-multiple_sounds("UBBG Dark 1", resultfile = "UBBG Dark 1 H.csv",
-                soundindex = "H")
-
-multiple_sounds("UBBG Dark 1", resultfile = "UBBG Dark 1 NDSI.csv",
-                soundindex = "ndsi")
-
-#Light 1
-
-multiple_sounds("UBBG Light 1", resultfile = "UBBG Light 1 ACI.csv",
-                soundindex = "acoustic_complexity")
-
-multiple_sounds("UBBG Light 1", resultfile = "UBBG Light 1 ADI.csv",
-                soundindex = "acoustic_diversity")
-
-multiple_sounds("UBBG Light 1", resultfile = "UBBG Light 1 AEI.csv",
-                soundindex = "acoustic_evenness")
-
-multiple_sounds("UBBG Light 1", resultfile = "UBBG Light 1 BI.csv",
-                soundindex = "bioacoustic_index")
-
-multiple_sounds("UBBG Light 1", resultfile = "UBBG Light 1 H.csv",
-                soundindex = "H")
-
-multiple_sounds("UBBG Light 1", resultfile = "UBBG Light 1 NDSI.csv",
-                soundindex = "ndsi")
-
-#Dark 2
-multiple_sounds("UBBG Dark 2", resultfile = "UBBG Dark 2 ACI.csv",
-                soundindex = "acoustic_complexity")
-
-multiple_sounds("UBBG Dark 2", resultfile = "UBBG Dark 2 ADI.csv",
-                soundindex = "acoustic_diversity")
-
-multiple_sounds("UBBG Dark 2", resultfile = "UBBG Dark 2 AEI.csv",
-                soundindex = "acoustic_evenness")
-
-multiple_sounds("UBBG Dark 2", resultfile = "UBBG Dark 2 BI.csv",
-                soundindex = "bioacoustic_index")
-
-multiple_sounds("UBBG Dark 2", resultfile = "UBBG Dark 2 H.csv",
-                soundindex = "H")
-
-multiple_sounds("UBBG Dark 2", resultfile = "UBBG Dark 2 NDSI.csv",
-                soundindex = "ndsi")
-
-install.packages("lmerTest")
-library(lmerTest)
-
-data <- read.table("Light pollution data.txt", header=T, sep = "\t")
+data <- read.csv("Light pollution full results.csv")
 head(data)
-data$Site <- as.factor(data$Site)
 
-library(brms)
+# Remove any leading/trailing whitespace in Treatment
+data$Treatment <- trimws(data$Treatment)
 
-#Log10 and scale all acoustic indices
-data$ACI_log10 <- log10(data$ACI)
-data$ACI_Scaled <- scale(data$ACI_log10)
-hist(data$ACI_Scaled)
+# Extract Site and Treatment into a separate object
+site_treatment <- data[, c("Site", "Treatment")]
 
-data$ADI_log10 <- log10(data$ADI)
-data$ADI_Scaled <- scale(data$ADI_log10)
+# Subset numeric columns from 4 to 63
+numeric_data <- data[, 4:63]
 
-data$BI_log10 <- log10(data$BI)
-data$BI_Scaled <- scale(data$BI_log10)
+# Compute correlation matrix
+cor_matrix <- cor(numeric_data, use = "complete.obs")
 
-data$H_log10 <- log10(data$H)
-data$H_Scaled <- scale(data$H_log10)
+# Plot correlation matrix
+corrplot(cor_matrix, method = "color", type = "upper", 
+         tl.cex = 0.7, tl.col = "black", addCoef.col = "black", number.cex = 0.5)
 
-data$NDSI_log10 <- log10(data$NDSI)
-data$NDSI_Scaled <- scale(data$NDSI_log10)
+# Print the correlation matrix
+print(cor_matrix)
 
-fit <- brm(ACI_Scaled ~ Treatment + (1 | Site), data = data, family = student(), 
-           prior = c(prior(normal(0, 10), class = "b"),
-                     prior(normal(0, 10), class = "sd")),
-           iter = 2000, warmup = 1000, chains = 4)
-summary(fit)
-print(fit$fit)
-summary(fit)$fixed
-summary(fit)$random
-summary(fit)$sigma
-summary(fit)$nu
+# Find indices of highly correlated variables (threshold > 0.8)
+high_corr_indices <- findCorrelation(cor_matrix, cutoff = 0.8, names = TRUE)
 
-# Install and load the emmeans package
-install.packages("emmeans")
-library(emmeans)
+# Remove them from the dataset
+filtered_data <- numeric_data[, !colnames(numeric_data) %in% high_corr_indices]
 
-# Obtain the estimated marginal means for the Treatment variable
-emm <- emmeans(fit, ~ Treatment)
+# Print the names of variables that were removed
+print(high_corr_indices)
 
-# Perform pairwise comparisons
-pairwise_comparisons <- pairs(emm)
-summary(pairwise_comparisons)
+# Print the names of variables that have been kept
+kept_variables <- colnames(filtered_data)
+print(kept_variables)
 
-library(bayesplot)
-mcmc_trace(fit, pars = c("sigma", "nu"))
+# Z-transform the filtered_data
+filtered_data_z <- as.data.frame(scale(filtered_data))
+summary(filtered_data_z)
 
-pp_check_results <- pp_check(fit)
-head(pp_check_results)
+# Add Site and Treatment back to filtered_data
+filtered_data_z <- cbind(site_treatment, filtered_data_z)
+head(filtered_data_z)
 
-pp_check_data <- pp_check_results$data
+#### Testing for equal or non-equal variance between treatment groups ####
+
+library(car)   
+library(dplyr)
+
+# Ensure Treatment is a factor
+filtered_data_z$Treatment <- as.factor(filtered_data_z$Treatment)
+
+# Get only the numeric columns (exclude Site and Treatment)
+numeric_vars <- filtered_data_z %>%
+  select(where(is.numeric)) %>%
+  colnames()
+
+# Apply Levene's Test to each variable
+levene_results <- lapply(numeric_vars, function(var) {
+  formula <- as.formula(paste(var, "~ Treatment"))
+  test <- leveneTest(formula, data = filtered_data_z)
+  data.frame(
+    Variable = var,
+    F = test$`F value`[1],
+    p_value = test$`Pr(>F)`[1]
+  )
+})
+
+# Combine results into a single data frame
+levene_results_df <- do.call(rbind, levene_results)
+
+# View results
+print(levene_results_df)
+
+##### Testing for normality #####
+
+# Identify numeric variables
+numeric_vars <- sapply(filtered_data_z, is.numeric)
+
+# Apply Shapiro-Wilk test to each numeric variable
+shapiro_results <- sapply(filtered_data_z[, numeric_vars], function(x) {
+  if (length(unique(x)) >= 3) {
+    shapiro.test(x)$p.value
+  } else {
+    NA  # Too few unique values for test
+  }
+})
+
+# Format into a dataframe
+shapiro_df <- data.frame(
+  Variable = names(shapiro_results),
+  Shapiro_p_value = shapiro_results,
+  Normality = ifelse(shapiro_results > 0.05, "Yes", "No")
+)
+
+print(shapiro_df)
+
+#### Kruskal-Wallis for Each Variable by Treatment within Site #####
+
+# Required libraries
+library(dplyr)
+library(purrr)
+library(FSA)      # For dunnTest
+library(tidyr)
+
+# Normalize Treatment names completely (optional)
+filtered_data_z <- filtered_data_z %>%
+  mutate(Treatment = tolower(trimws(Treatment)))  # All lowercase, no whitespace
+
+# Check for NA values in the Treatment column
+sum(is.na(filtered_data_z$Treatment))
+
+#Check treatment names are correct
+unique(filtered_data_z$Treatment) %>% print()
+
+# Variables to test
+variables_to_test <- setdiff(names(filtered_data_z), c("Site", "Treatment"))
+
+# Initialize results list
+full_results <- list()
+
+# Loop through each site
+for (site_name in unique(filtered_data_z$Site)) {
+  
+  # Subset data for current site
+  site_data <- filtered_data_z %>% filter(Site == site_name)
+  
+  # Loop through each variable
+  for (var in variables_to_test) {
+    
+    # Run Kruskal-Wallis
+    formula <- as.formula(paste(var, "~ Treatment"))
+    kruskal <- kruskal.test(formula, data = site_data)
+    
+    # Store Kruskal result
+    base_result <- tibble(
+      Site = site_name,
+      Variable = var,
+      KW_statistic = kruskal$statistic,
+      KW_p_value = kruskal$p.value,
+      Significant = ifelse(kruskal$p.value < 0.05, "Yes", "No")
+    )
+    
+    # If significant, run Dunn's test
+    if (kruskal$p.value < 0.05) {
+      dunn <- dunnTest(formula, data = site_data, method = "bonferroni")
+      dunn_df <- as_tibble(dunn$res)
+      
+      # Extract treatment pairs, direction, and p-values
+      dunn_df <- dunn_df %>%
+        separate(Comparison, into = c("Group1", "Group2"), sep = " - ") %>%
+        mutate(Direction = map2_chr(Group1, Group2, function(g1, g2) {
+          med1 <- median(site_data[[var]][site_data$Treatment == g1])
+          med2 <- median(site_data[[var]][site_data$Treatment == g2])
+          if (med1 < med2) {
+            paste(g2, ">", g1)
+          } else if (med1 > med2) {
+            paste(g1, ">", g2)
+          } else {
+            "No difference"
+          }
+        })) %>%
+        select(Group1, Group2, Z = Z, P.adj = P.adj, Direction)
+      
+      # Join Kruskal and Dunn results
+      combined <- base_result %>%
+        crossing(dunn_df)  # one Kruskal result per posthoc row
+      
+    } else {
+      combined <- base_result
+    }
+    
+    # Store combined result
+    full_results[[paste(site_name, var, sep = "_")]] <- combined
+  }
+}
+
+# Combine everything
+posthoc_results <- bind_rows(full_results)
+
+# Preview
+print(posthoc_results)
+
+write.csv(posthoc_results, "posthoc_results.csv")
+
+##### Heat map of key variables #####
 
 library(dplyr)
-plot <- ggplot() +
-  # Density plot for predicted values
-  geom_density(data = pp_check_data %>% filter(is_y == FALSE),
-               aes(x = value, group = rep_id), 
-               linewidth = 1, alpha = 1, color = "lightblue") +
-  # Density plot for observed values
-  geom_density(data = pp_check_data %>% filter(is_y == TRUE),
-               aes(x = value, group = rep_id),
-               linewidth = 1, alpha = 0.01, color = "black") +
-  labs(x = "Predicted Values",
-       y = "Density") +
-  coord_cartesian(xlim = c(-20, 20)) +  # Adjust x-axis limits
-  theme_bw() +
-  theme(legend.position = "none")
+library(ggplot2)
+library(forcats)
 
-ggsave("Density plot.jpeg", plot = plot, width = 10, height = 7, dpi = 300, units = "in")
+# Prepare data
+df <- posthoc_results %>%
+  mutate(
+    Comparison = paste(Group1, "vs", Group2),
+    DirectionLabel = case_when(
+      Z > 0 ~ "Group1 > Group2",
+      Z < 0 ~ "Group2 > Group1",
+      TRUE ~ "No difference"
+    ),
+    Significant = factor(Significant, levels = c("No", "Yes")),
+    Comparison = as.factor(Comparison),
+    Comparison = fct_relevel(Comparison, "NA vs NS", after = Inf)  # put this comparison last
+  )
+
+# Plot
+ggplot(df, aes(x = Comparison, y = Variable, fill = Z)) +
+  geom_tile(color = "white") +
+  facet_wrap(~ Site, scales = "free_x") +
+  scale_fill_gradient2(
+    low = "red",
+    mid = "white",
+    high = "orange",
+    midpoint = 0,
+    name = "Effect Size (Z)"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text = element_text(face = "bold")
+  ) +
+  labs(
+    fill = "Effect Size (Z)",
+    x = "Group Comparison",
+    y = "Variable"
+  )
 ```
 
