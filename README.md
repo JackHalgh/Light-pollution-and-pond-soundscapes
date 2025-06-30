@@ -17,7 +17,7 @@ library(forcats)
 
 #### Loading, cleaning, and scaling data ####
 
-data <- read.csv("Light pollution full results.csv")
+data <- read.csv("Light pollution full results (1 kHz, 10 kHz).csv")
 head(data)
 
 # Remove any leading/trailing whitespace in Treatment
