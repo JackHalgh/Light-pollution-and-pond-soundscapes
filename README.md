@@ -31,7 +31,6 @@ numeric_data <- data[, 4:63]
 
 # Compute correlation matrix
 cor_matrix <- cor(numeric_data, use = "complete.obs")
-help(cor)
 
 # Plot correlation matrix
 corrplot(cor_matrix, method = "color", type = "upper", 
