@@ -1,7 +1,100 @@
 # Light-pollution-and-pond-soundscapes
 
+#### Calculation of acoustic indices (Python)
+
 ```
-#By Jack A. Greenhalgh, 30th June, 2025.
+#By Jack A. Greenhalgh, June, 2025.
+#Department of Biology, McGill University, 1205 Dr Penfield Ave, Montreal, Quebec, H3A 1B1, Canada.
+
+import os
+import pandas as pd
+from maad import sound
+import maad.features.alpha_indices as ai
+from tqdm import tqdm  # Optional: shows progress bar
+
+# =============================
+# Configurable Parameters
+# =============================
+
+# Spectrogram parameters
+NFFT = 1024            # Number of FFT points (nperseg)
+noverlap = 512         # Overlap between segments
+window = 'hann'        # Type of window ('hann', 'hamming', etc.)
+
+# Temporal alpha indices parameters
+temporal_threshold_db = -50  # dB threshold for signal detection
+
+# Frequency range for spectral alpha indices
+fmin = 1000     # Minimum frequency (Hz)
+fmax = 24000    # Maximum frequency (Hz)
+
+# Main directory containing multiple folders with audio files
+main_directory = r"C:\Users\jgreenhalgh\Downloads\Light pollution\Light pollution Python"
+
+# =============================
+# Processing Loop
+# =============================
+
+# Loop through all subfolders in the main directory
+for foldername in os.listdir(main_directory):
+    folder_path = os.path.join(main_directory, foldername)
+    
+    # Proceed only if it's a directory
+    if os.path.isdir(folder_path):
+        print(f"\nProcessing folder: {foldername}")
+        results = []
+        
+        # List all .wav files in this subfolder
+        wav_files = [f for f in os.listdir(folder_path) if f.lower().endswith('.wav')]
+        
+        for filename in tqdm(wav_files, desc=f"Files in {foldername}"):
+            filepath = os.path.join(folder_path, filename)
+            try:
+                # Load the audio file
+                s, fs = sound.load(filepath)
+
+                # Generate spectrogram with parameters
+                Sxx_power, tn, fn, _ = sound.spectrogram(
+                    s, fs, window=window, nperseg=NFFT, noverlap=noverlap
+                )
+
+                # Compute spectral alpha indices with frequency limits
+                spectral = ai.all_spectral_alpha_indices(
+                    Sxx_power, tn, fn, fmin=fmin, fmax=fmax
+                )
+                spectral_dict = spectral[0].iloc[0].to_dict()
+
+                # Compute temporal alpha indices with threshold
+                temporal = ai.all_temporal_alpha_indices(s, fs, threshold=temporal_threshold_db)
+                temporal_dict = temporal.iloc[0].to_dict()
+
+                # Merge both sets of indices and tag filename with folder
+                combined = {**spectral_dict, **temporal_dict}
+                combined['filename'] = f"{foldername}_{filename}"  # Add folder prefix to filename
+
+                results.append(combined)
+
+            except Exception as e:
+                print(f"Error processing {filename} in {foldername}: {e}")
+
+        # If results were gathered, save to CSV named after the folder
+        if results:
+            df = pd.DataFrame(results)
+            cols = ['filename'] + [c for c in df.columns if c != 'filename']
+            df = df[cols].sort_values(by='filename').reset_index(drop=True)
+
+            output_csv = os.path.join(folder_path, f"{foldername}_alpha_acoustic_indices_results.csv")
+            df.to_csv(output_csv, index=False)
+
+            print(f"Results saved for folder '{foldername}' at:\n{output_csv}")
+        else:
+            print(f"No audio files processed in folder '{foldername}'.")
+```
+
+### Analysis of acoustic indices data (R Studio) 
+
+```
+#By Jack A. Greenhalgh, June, 2025.
 #Department of Biology, McGill University, 1205 Dr Penfield Ave, Montreal, Quebec, H3A 1B1, Canada.
 
 # Load required packages
