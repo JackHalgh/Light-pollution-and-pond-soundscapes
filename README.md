@@ -327,7 +327,7 @@ ggplot(df_light_vs_pre, aes(x = Z, y = Variable, fill = Z, alpha = Missing)) +
 
 ```
 
-### Heat map of acoustic indices for light treatment vs pre-light treatment (1 kHz - 10 kHz) 
+### Light treatment vs pre-light treatment (1 kHz - 10 kHz) as shown by key acoustic indices
 
 ![Image](https://github.com/user-attachments/assets/f2104c4f-8cf8-408a-9339-2aacc04a422a) 
 
