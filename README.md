@@ -330,3 +330,7 @@ ggplot(df_light_vs_pre, aes(x = Z, y = Variable, fill = Z, alpha = Missing)) +
 ### Heat map of acoustic indices for light treatment vs pre-light treatment (1 kHz - 10 kHz) 
 
 ![Image](https://github.com/user-attachments/assets/f2104c4f-8cf8-408a-9339-2aacc04a422a) 
+
+Darker red bars further to the left indicate _lower_ values of acoustic indices during the preiod when the light was on. Therefore, possibly _less_ stridulation but will need to check this again count data and what it is the acoustic index is measuring exactly. 
+
+Darker blue bars furtger to the right indicate _higher_ values of acoustic indices during the preiod when the light was on. Therefore, possibly _more_ stridulation but will need to check this again count data and what it is the acoustic index is measuring exactly. 
