@@ -287,48 +287,46 @@ write.csv(posthoc_results, "posthoc_results.csv")
 
 ##### Heat map of key variables #####
 
-# Prepare data
-df <- posthoc_results %>%
+library(dplyr)
+library(ggplot2)
+library(forcats)
+
+# Prepare and filter data for the specific comparison
+df_light_vs_pre <- posthoc_results %>%
+  filter(Group1 == "light treatment", Group2 == "pre-light treatment") %>%
   mutate(
-    Comparison = paste(Group1, "vs", Group2),
-    DirectionLabel = case_when(
-      Z > 0 ~ "Group1 > Group2",
-      Z < 0 ~ "Group2 > Group1",
-      TRUE ~ "No difference"
-    ),
-    Significant = factor(Significant, levels = c("No", "Yes")),
-    Comparison = as.factor(Comparison),
-    Comparison = fct_relevel(Comparison, "NA vs NS", after = Inf)  # put this comparison last
+    Comparison = "light vs pre-light",
+    Missing = ifelse(is.na(Z), "NA", "Data"),  # flag NA
+    Z = ifelse(is.na(Z), 0, Z),                # convert NA to 0 for plotting
+    Variable = factor(Variable, levels = unique(posthoc_results$Variable))
   )
 
-# Plot
-ggplot(df, aes(x = Comparison, y = Variable, fill = Z)) +
-  geom_tile(color = "white") +
-  facet_wrap(~ Site, scales = "free_x") +
+# Plot with gradient fill based on Z
+ggplot(df_light_vs_pre, aes(x = Z, y = Variable, fill = Z, alpha = Missing)) +
+  geom_col(width = 0.7, color = "black") +
+  facet_wrap(~ Site, scales = "fixed") +
   scale_fill_gradient2(
     low = "red",
     mid = "white",
-    high = "orange",
+    high = "blue",
     midpoint = 0,
-    name = "Effect Size (Z)"
+    name = "Effect size (Z)"
   ) +
-  theme_bw() +
+  scale_alpha_manual(values = c("Data" = 1, "NA" = 0.3), guide = FALSE) +
+  theme_bw(base_size = 12) +
   theme(
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    strip.text = element_text(face = "bold")
+    axis.text.y = element_text(size = 9),
+    strip.text = element_text(face = "bold", size = 13),
+    legend.position = "bottom"
   ) +
   labs(
-    fill = "Effect Size (Z)",
-    x = "Group Comparison",
-    y = "Variable"
+    x = "Effect size (Z)",
+    y = "Acoustic index",
+    fill = "Effect size (Z)"
   )
+
 ```
 
-### Heat map of acoustic indices (1 kHz - 10 kHz) 
+### Heat map of acoustic indices for light treatment vs pre-light treatment (1 kHz - 10 kHz) 
 
-![Image](https://github.com/user-attachments/assets/d148d077-d262-4b95-90b0-19b1c6878a42)
-
-### Heat map of acoustic indices (1 kHz - 24 kHz) 
-
-![Image](https://github.com/user-attachments/assets/5c2e6b52-37ff-4c12-86a7-b48411a81338)
-
+[Bar plots of effect sizes.pdf](https://github.com/user-attachments/files/21024253/Bar.plots.of.effect.sizes.pdf)
