@@ -336,3 +336,223 @@ Darker red bars further to the left indicate _lower_ values of acoustic indices 
 Darker blue bars further to the right indicate _higher_ values of acoustic indices during the preiod when the light was on. Therefore, possibly _more_ stridulation but will need to check this against count data and what it is the acoustic index is measuring exactly. 
 
 Empty spaces / no bars indicated a non-signifcant result for that acoustic index. 
+
+### False-colour spectrograms 
+
+
+```
+# === LIBRARIES ===
+library(tuneR)
+library(seewave)
+library(signal)
+library(entropy)
+library(dplyr)
+library(ggplot2)
+library(grDevices)
+library(patchwork) # Added library for final plot combination
+
+# === CONFIGURATION ===
+directory <- "D:/Light pollution/OSP_3_27.08.25/OSP_3_27.08.25"
+
+cat("Checking directory:", directory, "\n")
+
+if (!dir.exists(directory)) stop("The specified directory does not exist.")
+
+file_list <- list.files(directory, pattern = "\\.WAV$", full.names = TRUE)
+
+if (length(file_list) == 0) stop("No .WAV files found in the directory.")
+cat("Found", length(file_list), "files.\n")
+
+# === METRIC FUNCTIONS ===
+calculate_entropy <- function(freq_bin) {
+  total_energy <- sum(freq_bin)
+  if (total_energy == 0) return(0)
+  p <- freq_bin / total_energy
+  -sum(p * log(p + 1e-10))
+}
+
+calculate_aci <- function(freq_bin) {
+  local_maxima <- sum(diff(sign(diff(freq_bin))) == -2)
+  local_maxima / length(freq_bin)
+}
+
+calculate_background_noise <- function(freq_bin) {
+  median(freq_bin)
+}
+
+# === STORAGE ===
+entropy_list <- list()
+aci_list <- list()
+background_noise_list <- list()
+
+# === LOOP THROUGH FILES ===
+for (audio_file in file_list) {
+  # Using tryCatch to skip corrupted files
+  try({
+    wave <- readWave(audio_file)
+    y <- wave@left
+    sr <- wave@samp.rate
+    
+    n_fft <- 16384
+    hop_length <- n_fft / 2
+    
+    sg <- specgram(y, n = n_fft, Fs = sr, overlap = n_fft - hop_length)
+    S <- abs(sg$S)
+    S <- S / max(S)
+    S_db <- 10 * log10(S + 1e-10)
+    
+    entropy_values <- apply(S_db, 1, calculate_entropy)
+    aci_values <- apply(S_db, 1, calculate_aci)
+    noise_values <- apply(S_db, 1, calculate_background_noise)
+    
+    freq_bins <- seq(0, sr / 2, length.out = n_fft / 2 + 1)[1:nrow(S_db)]
+    
+    entropy_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
+                                                       Frequency = freq_bins,
+                                                       Entropy = entropy_values)
+    aci_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
+                                                   Frequency = freq_bins,
+                                                   ACI = aci_values)
+    background_noise_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
+                                                                Frequency = freq_bins,
+                                                                Background_Noise = noise_values)
+  }, silent = TRUE) # Silently skip files that fail to read
+}
+
+# === COMBINE ===
+entropy_all <- do.call(rbind, entropy_list)
+aci_all <- do.call(rbind, aci_list)
+background_noise_all <- do.call(rbind, background_noise_list)
+
+# === EXTRACT TIME FROM FILENAMES ===
+# MODIFIED: Only extract the time string (HHMMSS)
+extract_time <- function(df) {
+  df %>%
+    mutate(
+      TimeString = substr(File, 10, 15) # Assumes HHMMSS format
+    ) %>%
+    select(-File)
+}
+
+entropy_all <- extract_time(entropy_all)
+aci_all <- extract_time(aci_all)
+background_noise_all <- extract_time(background_noise_all)
+
+# === NEW: ADD FULL DATETIME TO HANDLE OVERNIGHT ===
+# Helper function to create full POSIXct time, handling overnight crossover
+add_datetime <- function(df) {
+  df %>%
+    mutate(
+      Hour = as.numeric(substr(TimeString, 1, 2)),
+      # Use date from directory name "25.08.2025"
+      # Assume experiment starts in the evening (>= 12:00) and runs past midnight (< 12:00)
+      Date = ifelse(Hour < 12, "2025-08-26", "2025-08-25"), 
+      TimeStr = paste0(substr(TimeString, 1, 2), ":",
+                       substr(TimeString, 3, 4), ":",
+                       substr(TimeString, 5, 6)),
+      Time = as.POSIXct(paste(Date, TimeStr), format = "%Y-%m-%d %H:%M:%S", tz = "UTC")
+    ) %>%
+    select(-TimeString, -Hour, -Date, -TimeStr) # Clean up intermediate columns
+}
+
+entropy_all <- add_datetime(entropy_all)
+aci_all <- add_datetime(aci_all)
+background_noise_all <- add_datetime(background_noise_all)
+
+# === SCALE INDICES ===
+scale_vec <- function(x) (x - min(x)) / (max(x) - min(x))
+
+entropy_all$Scaled_Entropy <- scale_vec(entropy_all$Entropy)
+aci_all$Scaled_ACI <- scale_vec(aci_all$ACI)
+background_noise_all$Scaled_Background_Noise <- scale_vec(background_noise_all$Background_Noise)
+
+# === COMBINE RGB ===
+combined_data <- data.frame(
+  Scaled_Entropy = entropy_all$Scaled_Entropy,
+  Scaled_ACI = aci_all$Scaled_ACI,
+  Scaled_Background_Noise = background_noise_all$Scaled_Background_Noise
+)
+
+RGB_Data <- data.frame(Color = rgb(
+  combined_data$Scaled_Entropy,
+  combined_data$Scaled_ACI,
+  combined_data$Scaled_Background_Noise
+))
+
+# === CREATE FINAL DATA FRAME ===
+# MODIFIED: Use the new 'Time' column which is already a full POSIXct object
+combined_df <- data.frame(
+  Frequency = entropy_all$Frequency,
+  Time = entropy_all$Time, # This now correctly spans midnight
+  Color = RGB_Data$Color
+)
+
+# === REMOVE BACKGROUND NOISE ===
+hex_table <- table(combined_df$Color)
+hex_df <- as.data.frame(hex_table)
+colnames(hex_df) <- c("HEX", "Count")
+threshold <- quantile(hex_df$Count, 0.9)
+dominant_hexes <- hex_df$HEX[hex_df$Count >= threshold]
+
+replace_dominant_hex <- function(color) {
+  if (color %in% dominant_hexes) "#000000" else color
+}
+
+combined_df$Adjusted_Color <- sapply(combined_df$Color, replace_dominant_hex)
+
+# === DEFINE EXPERIMENTAL PERIODS ===
+# MODIFIED: Removed the "Acclimatisation" period.
+periods_filtered <- periods %>%
+  filter(Label != "Acclimatisation")
+
+# === PLOT MAIN SPECTROGRAM ===
+# MODIFIED: Restored X-axis text and ticks so the time is visible on the bottom plot.
+p_spec <- ggplot(combined_df, aes(x = Time, y = Frequency)) +
+  geom_tile(aes(fill = Adjusted_Color)) +
+  scale_fill_identity() +
+  # Set x-axis limits to match the new, filtered period bars exactly
+  scale_x_datetime(limits = c(min(periods_filtered$Start), max(periods_filtered$End)), 
+                   date_breaks = "15 min", 
+                   date_labels = "%H:%M") + 
+  scale_y_continuous(limits = c(0, max(combined_df$Frequency)), expand = c(0, 0)) +
+  labs(x = "Time", y = "Frequency (Hz)") +
+  theme_bw() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(angle = 0, hjust = 1), # Restored labels
+    axis.ticks.x = element_line(),                    # Restored ticks
+    plot.margin = margin(0, 5, 0, 5)
+  )
+
+# === PERIOD BAR PLOT ===
+# MODIFIED: Now uses periods_filtered
+p_periods <- ggplot(periods_filtered, aes(xmin = Start, xmax = End, ymin = 0, ymax = 1, fill = Fill)) +
+  geom_rect(color = "white") +
+  geom_text(aes(x = (Start + (End - Start) / 2),
+                y = 0.5, label = Label),
+            color = "black", size = 4, fontface = "bold") +
+  scale_fill_identity() +
+  # Set x-axis limits to match the spectrogram plot exactly
+  scale_x_datetime(limits = c(min(periods_filtered$Start), max(periods_filtered$End))) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_void() +
+  # MODIFIED: Hide x-axis elements for the top (now bottom) plot to align perfectly
+  # and remove extra axis text
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    plot.margin = margin(5, 5, 0, 5)
+  )
+
+# === COMBINE USING patchwork ===
+# MODIFIED: Changed plot order to p_spec / p_periods to put the spectrogram on top.
+final_plot <- p_spec / p_periods + plot_layout(heights = c(1, 0.075)) # Swapped heights
+
+# === SAVE ===
+ggsave("25.08.2025_fullfreq_periodbars_REVISED.pdf", plot = final_plot, width = 10, height = 7, dpi = 300)
+
+cat("Plot saved as 27.08.2025_fullfreq_periodbars_REVISED.pdf\n")
+
+```
+
+
