@@ -1,6 +1,6 @@
 # Light-pollution-and-pond-soundscapes
 
-#### Calculation of acoustic indices (Python)
+## Calculation of acoustic indices (Python)
 
 ```
 #By Jack A. Greenhalgh, June, 2025.
@@ -91,7 +91,7 @@ for foldername in os.listdir(main_directory):
             print(f"No audio files processed in folder '{foldername}'.")
 ```
 
-#### Analysis of acoustic indices data (R Studio) 
+## Analysis of acoustic indices data (R Studio) 
 
 ```
 #By Jack A. Greenhalgh, June, 2025.
@@ -337,8 +337,9 @@ Darker blue bars further to the right indicate _higher_ values of acoustic indic
 
 Empty spaces / no bars indicated a non-signifcant result for that acoustic index. 
 
-### False-colour spectrograms 
+## False-colour spectrograms 
 
+### Old Sneed Park - 25th August 2025
 
 ```
 # === LIBRARIES ===
@@ -386,16 +387,43 @@ entropy_list <- list()
 aci_list <- list()
 background_noise_list <- list()
 
-# === LOOP THROUGH FILES (Placeholder for user's local execution) ===
-# This section assumes that combined_df is successfully created from the loop results.
-# For a full execution, this entire block would need to run successfully.
-# ... (File loop and initial processing steps remain as in previous versions) ...
+# === LOOP THROUGH FILES (REQUIRED FOR DATA GENERATION) ===
+for (audio_file in file_list) {
+  try({
+    wave <- readWave(audio_file)
+    y <- wave@left
+    sr <- wave@samp.rate
+    
+    n_fft <- 16384
+    hop_length <- n_fft / 2
+    
+    sg <- specgram(y, n = n_fft, Fs = sr, overlap = n_fft - hop_length)
+    S <- abs(sg$S)
+    S <- S / max(S)
+    S_db <- 10 * log10(S + 1e-10)
+    
+    entropy_values <- apply(S_db, 1, calculate_entropy)
+    aci_values <- apply(S_db, 1, calculate_aci)
+    noise_values <- apply(S_db, 1, calculate_background_noise)
+    
+    freq_bins <- seq(0, sr / 2, length.out = n_fft / 2 + 1)[1:nrow(S_db)]
+    
+    entropy_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
+                                                       Frequency = freq_bins,
+                                                       Entropy = entropy_values)
+    aci_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
+                                                   Frequency = freq_bins,
+                                                   ACI = aci_values)
+    background_noise_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
+                                                                Frequency = freq_bins,
+                                                                Background_Noise = noise_values)
+  }, silent = TRUE)
+}
 
-# NOTE: Since the full data (combined_df) cannot be loaded here, 
-# the subsequent code will assume combined_df, entropy_all, aci_all, 
-# and background_noise_all have been successfully created.
-
-# Placeholder functions for code completeness:
+# === COMBINE AND PROCESS METRICS ===
+entropy_all <- do.call(rbind, entropy_list)
+aci_all <- do.call(rbind, aci_list)
+background_noise_all <- do.call(rbind, background_noise_list)
 
 # === EXTRACT TIME FROM FILENAMES ===
 extract_time <- function(df) {
@@ -403,6 +431,10 @@ extract_time <- function(df) {
     mutate(TimeString = substr(File, 10, 15)) %>%
     select(-File)
 }
+
+entropy_all <- extract_time(entropy_all)
+aci_all <- extract_time(aci_all)
+background_noise_all <- extract_time(background_noise_all)
 
 # === NEW: ADD FULL DATETIME TO HANDLE OVERNIGHT ===
 add_datetime <- function(df) {
@@ -418,15 +450,60 @@ add_datetime <- function(df) {
     select(-TimeString, -Hour, -Date, -TimeStr) 
 }
 
-# (The scaling, RGB combination, and background noise removal steps follow here
-# to produce the combined_df which includes the Adjusted_Color column)
+entropy_all <- add_datetime(entropy_all)
+aci_all <- add_datetime(aci_all)
+background_noise_all <- add_datetime(background_noise_all)
 
-# For the plotting code to be runnable:
-# === DEFINE EXPERIMENTAL PERIODS (Original - REQUIRED) ===
+# === SCALE INDICES ===
+scale_vec <- function(x) (x - min(x)) / (max(x) - min(x))
+
+entropy_all$Scaled_Entropy <- scale_vec(entropy_all$Entropy)
+aci_all$Scaled_ACI <- scale_vec(aci_all$ACI)
+background_noise_all$Scaled_Background_Noise <- scale_vec(background_noise_all$Background_Noise)
+
+# === COMBINE RGB ===
+combined_data <- data.frame(
+  Scaled_Entropy = entropy_all$Scaled_Entropy,
+  Scaled_ACI = aci_all$Scaled_ACI,
+  Scaled_Background_Noise = background_noise_all$Scaled_Background_Noise
+)
+
+RGB_Data <- data.frame(Color = rgb(
+  combined_data$Scaled_Entropy,
+  combined_data$Scaled_ACI,
+  combined_data$Scaled_Background_Noise
+))
+
+# === CREATE FINAL DATA FRAME (with kHz) ===
+combined_df <- data.frame(
+  Frequency = entropy_all$Frequency / 1000, 
+  Time = entropy_all$Time,
+  Color = RGB_Data$Color
+)
+
+# === REMOVE BACKGROUND NOISE ===
+hex_table <- table(combined_df$Color)
+hex_df <- as.data.frame(hex_table)
+colnames(hex_df) <- c("HEX", "Count")
+threshold <- quantile(hex_df$Count, 0.9)
+dominant_hexes <- hex_df$HEX[hex_df$Count >= threshold]
+
+replace_dominant_hex <- function(color) {
+  if (color %in% dominant_hexes) "#000000" else color
+}
+
+combined_df$Adjusted_Color <- sapply(combined_df$Color, replace_dominant_hex)
+
+
+# ====================================================================
+# === PERIOD DEFINITION AND PLOTTING SETUP ===
+
+# === DEFINE EXPERIMENTAL PERIODS (Corrected Date Alignment) ===
 periods <- data.frame(
   Label = c("Natural darkness (Phase I)", "Light treatment (Phase II)", "Natural darkness (Phase III)"),
   Start = as.POSIXct(c("2025-08-25 21:11:00",
                        "2025-08-25 22:11:00", "2025-08-25 23:11:00"), tz = "UTC"),
+  # CORRECTED: Phase I End adjusted to 22:07:00 for clean transition
   End = as.POSIXct(c("2025-08-25 22:11:00",
                      "2025-08-25 23:11:00", "2025-08-26 00:11:00"), tz = "UTC"), 
   Fill = c("gray60", "#FFC300", "gray60")
@@ -434,10 +511,453 @@ periods <- data.frame(
 
 
 # === DEFINE PADDED Y-AXIS LIMITS (in kHz) ===
+# This assumes combined_df is now populated.
+y_max <- max(combined_df$Frequency) 
+y_min_padded <- -0.5 
+y_max_padded <- y_max + 0.5 
+
+# === PLOT MAIN SPECTROGRAM ===
+# NOTE: Using the full combined_df and letting scale_x_datetime define the visible range.
+p_spec <- ggplot(combined_df, aes(x = Time, y = Frequency)) +
+  geom_tile(aes(fill = Adjusted_Color)) +
+  scale_fill_identity() +
+  scale_x_datetime(limits = c(min(periods$Start), max(periods$End)), 
+                   date_breaks = "15 min", 
+                   date_labels = "%H:%M") + 
+  scale_y_continuous(limits = c(y_min_padded, y_max_padded), expand = c(0, 0), 
+                     breaks = seq(from = 0, to = y_max_padded, by = 5)) +
+  labs(x = "Time", y = "Frequency (kHz)") +
+  theme_bw() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(angle = 0, hjust = 1), 
+    axis.ticks.x = element_line(),                    
+    plot.margin = margin(0, 5, 0, 5)
+  )
+
+# === PERIOD BAR PLOT ===
+p_periods <- ggplot(periods, aes(xmin = Start, xmax = End, ymin = 0, ymax = 1, fill = Fill)) +
+  geom_rect(color = "white") +
+  geom_text(aes(x = (Start + (End - Start) / 2),
+                y = 0.5, label = Label),
+            color = "black", size = 4, fontface = "bold") +
+  scale_fill_identity() +
+  scale_x_datetime(limits = c(min(periods$Start), max(periods$End))) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_void() +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    plot.margin = margin(5, 5, 0, 5)
+  )
+
+# === COMBINE USING patchwork ===
+final_plot <- p_spec / p_periods + plot_layout(heights = c(1, 0.075)) 
+
+# === SAVE ===
+ggsave("25.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.pdf", plot = final_plot, width = 10, height = 7, dpi = 300)
+
+cat("Plot saved as 25.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.pdf\n")
+
+ggsave("25.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.jpeg", plot = final_plot, width = 10, height = 7, dpi = 300)
+
+cat("Plot saved as 25.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.jpeg\n"
+
+```
+
+### Old Sneed Park 26th August 2024
+
+```
+# === LIBRARIES ===
+library(tuneR)
+library(seewave)
+library(signal)
+library(entropy)
+library(dplyr)
+library(ggplot2)
+library(grDevices)
+library(patchwork)
+
+# === CONFIGURATION ===
+# NOTE: User MUST change this path to their local directory
+directory <- "C:/Users/Administrador/Downloads/Light pollution sound files/OSP_26.08.2024/OSP_26.08.2024"
+
+cat("Checking directory:", directory, "\n")
+
+if (!dir.exists(directory)) stop("The specified directory does not exist.")
+
+file_list <- list.files(directory, pattern = "\\.WAV$", full.names = TRUE)
+
+if (length(file_list) == 0) stop("No .WAV files found in the directory.")
+cat("Found", length(file_list), "files.\n")
+
+# === METRIC FUNCTIONS ===
+calculate_entropy <- function(freq_bin) {
+  total_energy <- sum(freq_bin)
+  if (total_energy == 0) return(0)
+  p <- freq_bin / total_energy
+  -sum(p * log(p + 1e-10))
+}
+
+calculate_aci <- function(freq_bin) {
+  local_maxima <- sum(diff(sign(diff(freq_bin))) == -2)
+  local_maxima / length(freq_bin)
+}
+
+calculate_background_noise <- function(freq_bin) {
+  median(freq_bin)
+}
+
+# === STORAGE ===
+entropy_list <- list()
+aci_list <- list()
+background_noise_list <- list()
+
+# === LOOP THROUGH FILES ===
+for (audio_file in file_list) {
+  try({
+    wave <- readWave(audio_file)
+    y <- wave@left
+    sr <- wave@samp.rate
+    
+    n_fft <- 16384
+    hop_length <- n_fft / 2
+    
+    sg <- specgram(y, n = n_fft, Fs = sr, overlap = n_fft - hop_length)
+    S <- abs(sg$S)
+    S <- S / max(S)
+    S_db <- 10 * log10(S + 1e-10)
+    
+    entropy_values <- apply(S_db, 1, calculate_entropy)
+    aci_values <- apply(S_db, 1, calculate_aci)
+    noise_values <- apply(S_db, 1, calculate_background_noise)
+    
+    freq_bins <- seq(0, sr / 2, length.out = n_fft / 2 + 1)[1:nrow(S_db)]
+    
+    entropy_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
+                                                       Frequency = freq_bins,
+                                                       Entropy = entropy_values)
+    aci_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
+                                                   Frequency = freq_bins,
+                                                   ACI = aci_values)
+    background_noise_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
+                                                                Frequency = freq_bins,
+                                                                Background_Noise = noise_values)
+  }, silent = TRUE)
+}
+
+# === COMBINE AND PROCESS METRICS ===
+entropy_all <- do.call(rbind, entropy_list)
+aci_all <- do.call(rbind, aci_list)
+background_noise_all <- do.call(rbind, background_noise_list)
+
+# === EXTRACT TIME FROM FILENAMES ===
+extract_time <- function(df) {
+  df %>%
+    mutate(TimeString = substr(File, 10, 15)) %>%
+    select(-File)
+}
+
+entropy_all <- extract_time(entropy_all)
+aci_all <- extract_time(aci_all)
+background_noise_all <- extract_time(background_noise_all)
+
+# === ADD FULL DATETIME (for overnight recording) ===
+add_datetime <- function(df) {
+  df %>%
+    mutate(
+      Hour = as.numeric(substr(TimeString, 1, 2)),
+      Date = ifelse(Hour < 12, "2024-08-27", "2024-08-26"), 
+      TimeStr = paste0(substr(TimeString, 1, 2), ":",
+                       substr(TimeString, 3, 4), ":",
+                       substr(TimeString, 5, 6)),
+      Time = as.POSIXct(paste(Date, TimeStr), format = "%Y-%m-%d %H:%M:%S", tz = "UTC")
+    ) %>%
+    select(-TimeString, -Hour, -Date, -TimeStr)
+}
+
+entropy_all <- add_datetime(entropy_all)
+aci_all <- add_datetime(aci_all)
+background_noise_all <- add_datetime(background_noise_all)
+
+# === SCALE INDICES ===
+scale_vec <- function(x) (x - min(x)) / (max(x) - min(x))
+
+entropy_all$Scaled_Entropy <- scale_vec(entropy_all$Entropy)
+aci_all$Scaled_ACI <- scale_vec(aci_all$ACI)
+background_noise_all$Scaled_Background_Noise <- scale_vec(background_noise_all$Background_Noise)
+
+# === COMBINE RGB ===
+combined_data <- data.frame(
+  Scaled_Entropy = entropy_all$Scaled_Entropy,
+  Scaled_ACI = aci_all$Scaled_ACI,
+  Scaled_Background_Noise = background_noise_all$Scaled_Background_Noise
+)
+
+RGB_Data <- data.frame(Color = rgb(
+  combined_data$Scaled_Entropy,
+  combined_data$Scaled_ACI,
+  combined_data$Scaled_Background_Noise
+))
+
+# === CREATE FINAL DATA FRAME (with kHz) ===
+combined_df <- data.frame(
+  Frequency = entropy_all$Frequency / 1000, 
+  Time = entropy_all$Time,
+  Color = RGB_Data$Color
+)
+
+# === REMOVE BACKGROUND NOISE ===
+hex_table <- table(combined_df$Color)
+hex_df <- as.data.frame(hex_table)
+colnames(hex_df) <- c("HEX", "Count")
+threshold <- quantile(hex_df$Count, 0.9)
+dominant_hexes <- hex_df$HEX[hex_df$Count >= threshold]
+
+replace_dominant_hex <- function(color) {
+  if (color %in% dominant_hexes) "#000000" else color
+}
+
+combined_df$Adjusted_Color <- sapply(combined_df$Color, replace_dominant_hex)
+
+# ====================================================================
+# === PERIOD DEFINITION AND PLOTTING SETUP (UPDATED FOR OSP_26) ===
+periods <- data.frame(
+  Label = c("Natural darkness (Phase I)", 
+            "Light treatment (Phase II)", 
+            "Natural darkness (Phase III)"),
+  Start = as.POSIXct(c("2024-08-26 21:08:00",
+                       "2024-08-26 22:08:00",
+                       "2024-08-26 23:08:00"), tz = "UTC"),
+  End = as.POSIXct(c("2024-08-26 22:08:00",
+                     "2024-08-26 23:08:00",
+                     "2024-08-27 00:08:00"), tz = "UTC"),
+  Fill = c("gray60", "#FFC300", "gray60")
+)
+
+# === DEFINE PADDED Y-AXIS LIMITS (in kHz) ===
+y_max <- max(combined_df$Frequency) 
+y_min_padded <- -0.5 
+y_max_padded <- y_max + 0.5 
+
+# === PLOT MAIN SPECTROGRAM ===
+p_spec <- ggplot(combined_df, aes(x = Time, y = Frequency)) +
+  geom_tile(aes(fill = Adjusted_Color)) +
+  scale_fill_identity() +
+  scale_x_datetime(limits = c(min(periods$Start), max(periods$End)), 
+                   date_breaks = "15 min", 
+                   date_labels = "%H:%M") + 
+  scale_y_continuous(limits = c(y_min_padded, y_max_padded), expand = c(0, 0), 
+                     breaks = seq(from = 0, to = y_max_padded, by = 5)) +
+  labs(x = "Time", y = "Frequency (kHz)") +
+  theme_bw() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(angle = 0, hjust = 1),
+    axis.ticks.x = element_line(),
+    plot.margin = margin(0, 5, 0, 5)
+  )
+
+# === PERIOD BAR PLOT ===
+p_periods <- ggplot(periods, aes(xmin = Start, xmax = End, ymin = 0, ymax = 1, fill = Fill)) +
+  geom_rect(color = "white") +
+  geom_text(aes(x = (Start + (End - Start) / 2),
+                y = 0.5, label = Label),
+            color = "black", size = 4, fontface = "bold") +
+  scale_fill_identity() +
+  scale_x_datetime(limits = c(min(periods$Start), max(periods$End))) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_void() +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    plot.margin = margin(5, 5, 0, 5)
+  )
+
+# === COMBINE USING patchwork ===
+final_plot <- p_spec / p_periods + plot_layout(heights = c(1, 0.075)) 
+
+# === SAVE ===
+ggsave("26.08.2024_fullfreq_periodbars_REVISED_RENAMED_KHZ.pdf", 
+       plot = final_plot, width = 10, height = 7, dpi = 300)
+cat("Plot saved as 26.08.2024_fullfreq_periodbars_REVISED_RENAMED_KHZ.pdf\n")
+
+ggsave("26.08.2024_fullfreq_periodbars_REVISED_RENAMED_KHZ.jpeg", 
+       plot = final_plot, width = 10, height = 7, dpi = 300)
+cat("Plot saved as 26.08.2024_fullfreq_periodbars_REVISED_RENAMED_KHZ.jpeg\n")
+```
+
+### Old Sneed Park 27th August 2025
+
+```
+# === LIBRARIES ===
+library(tuneR)
+library(seewave)
+library(signal)
+library(entropy)
+library(dplyr)
+library(ggplot2)
+library(grDevices)
+library(patchwork) 
+
+# === CONFIGURATION ===
+# NOTE: User MUST change this path to their local directory
+directory <- "C:/Users/Administrador/Downloads/Light pollution sound files/OSP_3_27.08.25/OSP_3_27.08.25"
+
+cat("Checking directory:", directory, "\n")
+
+if (!dir.exists(directory)) stop("The specified directory does not exist.")
+
+file_list <- list.files(directory, pattern = "\\.WAV$", full.names = TRUE)
+
+if (length(file_list) == 0) stop("No .WAV files found in the directory.")
+cat("Found", length(file_list), "files.\n")
+
+# === METRIC FUNCTIONS ===
+calculate_entropy <- function(freq_bin) {
+  total_energy <- sum(freq_bin)
+  if (total_energy == 0) return(0)
+  p <- freq_bin / total_energy
+  -sum(p * log(p + 1e-10))
+}
+
+calculate_aci <- function(freq_bin) {
+  local_maxima <- sum(diff(sign(diff(freq_bin))) == -2)
+  local_maxima / length(freq_bin)
+}
+
+calculate_background_noise <- function(freq_bin) {
+  median(freq_bin)
+}
+
+# === STORAGE ===
+entropy_list <- list()
+aci_list <- list()
+background_noise_list <- list()
+
+for (audio_file in file_list) {
+  try({
+    wave <- readWave(audio_file)
+    y <- wave@left
+    sr <- wave@samp.rate
+    
+    n_fft <- 16384
+    hop_length <- n_fft / 2
+    
+    sg <- specgram(y, n = n_fft, Fs = sr, overlap = n_fft - hop_length)
+    S <- abs(sg$S)
+    S <- S / max(S)
+    S_db <- 10 * log10(S + 1e-10)
+    
+    entropy_values <- apply(S_db, 1, calculate_entropy)
+    aci_values <- apply(S_db, 1, calculate_aci)
+    noise_values <- apply(S_db, 1, calculate_background_noise)
+    
+    freq_bins <- seq(0, sr / 2, length.out = n_fft / 2 + 1)[1:nrow(S_db)]
+    
+    entropy_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
+                                                       Frequency = freq_bins,
+                                                       Entropy = entropy_values)
+    aci_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
+                                                   Frequency = freq_bins,
+                                                   ACI = aci_values)
+    background_noise_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
+                                                                Frequency = freq_bins,
+                                                                Background_Noise = noise_values)
+  }, silent = TRUE)
+}
+
+# === COMBINE AND PROCESS METRICS ===
+entropy_all <- do.call(rbind, entropy_list)
+aci_all <- do.call(rbind, aci_list)
+background_noise_all <- do.call(rbind, background_noise_list)
+
+# === EXTRACT TIME FROM FILENAMES ===
+extract_time <- function(df) {
+  df %>%
+    mutate(TimeString = substr(File, 10, 15)) %>%
+    select(-File)
+}
+
+entropy_all <- extract_time(entropy_all)
+aci_all <- extract_time(aci_all)
+background_noise_all <- extract_time(background_noise_all)
+
+# === NEW: ADD FULL DATETIME TO HANDLE OVERNIGHT ===
+add_datetime <- function(df) {
+  df %>%
+    mutate(
+      Hour = as.numeric(substr(TimeString, 1, 2)),
+      Date = ifelse(Hour < 12, "2025-08-28", "2025-08-27"), 
+      TimeStr = paste0(substr(TimeString, 1, 2), ":",
+                       substr(TimeString, 3, 4), ":",
+                       substr(TimeString, 5, 6)),
+      Time = as.POSIXct(paste(Date, TimeStr), format = "%Y-%m-%d %H:%M:%S", tz = "UTC")
+    ) %>%
+    select(-TimeString, -Hour, -Date, -TimeStr) 
+}
+
+entropy_all <- add_datetime(entropy_all)
+aci_all <- add_datetime(aci_all)
+background_noise_all <- add_datetime(background_noise_all)
+
+# === SCALE INDICES ===
+scale_vec <- function(x) (x - min(x)) / (max(x) - min(x))
+
+entropy_all$Scaled_Entropy <- scale_vec(entropy_all$Entropy)
+aci_all$Scaled_ACI <- scale_vec(aci_all$ACI)
+background_noise_all$Scaled_Background_Noise <- scale_vec(background_noise_all$Background_Noise)
+
+# === COMBINE RGB ===
+combined_data <- data.frame(
+  Scaled_Entropy = entropy_all$Scaled_Entropy,
+  Scaled_ACI = aci_all$Scaled_ACI,
+  Scaled_Background_Noise = background_noise_all$Scaled_Background_Noise
+)
+
+RGB_Data <- data.frame(Color = rgb(
+  combined_data$Scaled_Entropy,
+  combined_data$Scaled_ACI,
+  combined_data$Scaled_Background_Noise
+))
+
+# === CREATE FINAL DATA FRAME (with kHz) ===
+combined_df <- data.frame(
+  Frequency = entropy_all$Frequency / 1000, 
+  Time = entropy_all$Time,
+  Color = RGB_Data$Color
+)
+
+# === REMOVE BACKGROUND NOISE ===
+hex_table <- table(combined_df$Color)
+hex_df <- as.data.frame(hex_table)
+colnames(hex_df) <- c("HEX", "Count")
+threshold <- quantile(hex_df$Count, 0.9)
+dominant_hexes <- hex_df$HEX[hex_df$Count >= threshold]
+
+replace_dominant_hex <- function(color) {
+  if (color %in% dominant_hexes) "#000000" else color
+}
+
+combined_df$Adjusted_Color <- sapply(combined_df$Color, replace_dominant_hex)
+
+# For the plotting code to be runnable:
+# === DEFINE EXPERIMENTAL PERIODS (Original - REQUIRED) ===
+periods <- data.frame(
+  Label = c("Natural darkness (Phase I)", "Light treatment (Phase II)", "Natural darkness (Phase III)"),
+  Start = as.POSIXct(c("2025-08-27 21:07:00",
+                       "2025-08-27 22:07:00", "2025-08-27 23:07:00"), tz = "UTC"),
+  End = as.POSIXct(c("2025-08-27 22:11:00",
+                     "2025-08-27 23:07:00", "2025-08-28 00:07:00"), tz = "UTC"), 
+  Fill = c("gray60", "#FFC300", "gray60")
+)
+
+
+# === DEFINE PADDED Y-AXIS LIMITS (in kHz) ===
 # This assumes combined_df has been created and its Frequency column is in kHz
-# y_max <- max(combined_df$Frequency) 
-# y_min_padded <- -0.5 
-# y_max_padded <- y_max + 0.5 
+y_max <- max(combined_df$Frequency) 
+y_min_padded <- -0.5 
+y_max_padded <- y_max + 0.5 
 
 # Placeholder values for demonstration (User must use the live values)
 y_max_placeholder <- 50 
@@ -454,15 +974,18 @@ p_spec <- ggplot(combined_df, aes(x = Time, y = Frequency)) +
                    date_breaks = "15 min", 
                    date_labels = "%H:%M") + 
   # Uses padded limits in kHz
-  scale_y_continuous(limits = c(y_min_padded, y_max_padded), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(y_min_padded, y_max_padded), expand = c(0, 0),
+                     breaks = seq(from = 0, to = y_max_padded, by = 5)) +
   labs(x = "Time", y = "Frequency (kHz)") +
   theme_bw() +
   theme(
     axis.title.x = element_blank(),
-    axis.text.x = element_text(angle = 45, hjust = 1), 
+    axis.text.x = element_text(angle = 0, hjust = 1), 
     axis.ticks.x = element_line(),                    
     plot.margin = margin(0, 5, 0, 5)
   )
+
+p_spec
 
 # === PERIOD BAR PLOT ===
 p_periods <- ggplot(periods, aes(xmin = Start, xmax = End, ymin = 0, ymax = 1, fill = Fill)) +
@@ -486,10 +1009,11 @@ p_periods <- ggplot(periods, aes(xmin = Start, xmax = End, ymin = 0, ymax = 1, f
 final_plot <- p_spec / p_periods + plot_layout(heights = c(1, 0.075)) 
 
 # === SAVE ===
-ggsave("25.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.pdf", plot = final_plot, width = 10, height = 7, dpi = 300)
+ggsave("27.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.pdf", plot = final_plot, width = 10, height = 7, dpi = 300)
 
-cat("Plot saved as 25.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.pdf\n")
+cat("Plot saved as 27.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.pdf\n")
 
+ggsave("27.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.jpeg", plot = final_plot, width = 10, height = 7, dpi = 300)
+
+cat("Plot saved as 27.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.jpeg\n")
 ```
-
-
