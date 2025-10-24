@@ -1135,12 +1135,15 @@ cat("Plot saved as 27.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.jpeg\n")
 ## PCAs for all Old Sneed Park dates
 
 ```
+# ===============================
+# 📦 Load Required Libraries
+# ===============================
+library(dplyr)
+library(lubridate)
 library(stringr)
 library(corrplot)
 library(caret)
 library(ggplot2)
-library(dplyr)
-library(lubridate)
 
 # ===============================
 # 🧩 Data Loading
@@ -1196,8 +1199,8 @@ metadata <- data.frame(Filename = merged_data$filename)
 
 metadata <- metadata %>%
   mutate(
-    # Extract OSP_25, OSP_26, or OSP_27
-    Site = str_extract(Filename, "OSP_25|OSP_26|OSP_27"),
+    # <-- FIX: Updated regex to capture OSP_26 as well
+    Site = str_extract(Filename, "OSP_\\d{2}"), 
     datetime_str = str_extract(Filename, "\\d{8}_\\d{6}"),
     Datetime = as.POSIXct(datetime_str, format = "%Y%m%d_%H%M%S", tz = "UTC")
   )
@@ -1214,6 +1217,7 @@ metadata <- metadata %>%
       (Datetime >= ymd_hms("2025-08-25 23:11:00") & Datetime < ymd_hms("2025-08-26 00:11:00")) ~ "Natural darkness (Phase III)",
       
       # OSP_26 Treatments (2024-08-26 to 2024-08-27)
+      # <-- FIX: Changed years from 2025 to 2024
       (Datetime >= ymd_hms("2024-08-26 21:08:00") & Datetime < ymd_hms("2024-08-26 22:08:00")) ~ "Natural darkness (Phase I)",
       (Datetime >= ymd_hms("2024-08-26 22:08:00") & Datetime < ymd_hms("2024-08-26 23:08:00")) ~ "Light treatment (Phase II)",
       (Datetime >= ymd_hms("2024-08-26 23:08:00") & Datetime < ymd_hms("2024-08-27 00:08:00")) ~ "Natural darkness (Phase III)",
@@ -1226,6 +1230,7 @@ metadata <- metadata %>%
       TRUE ~ "Other"
     )
   )
+
 
 # ===============================
 # 📊 PCA Analysis
@@ -1245,20 +1250,25 @@ pca_scores$Treatment <- metadata$Treatment
 # ===============================
 # 🎨 PCA Plots with Treatment Colors & Site Shapes
 # ===============================
+# Define colors for Treatments
 Treatment_colors <- c(
   "Natural darkness (Phase I)" = "gray60",
   "Light treatment (Phase II)" = "#FFC300",
   "Natural darkness (Phase III)" = "gray60"
 )
 
+# Define shapes for Sites
+# <-- FIX: Added OSP_26 to the shapes list
 Site_shapes <- c(
   "OSP_25" = 16,  # circle
   "OSP_26" = 15,  # square
   "OSP_27" = 17   # triangle
 )
 
+# Filter data for plotting
 pca_scores_filtered <- pca_scores %>%
-  filter(Treatment != "Other") %>%
+  # <-- FIX: Explicitly call dplyr::filter
+  dplyr::filter(Treatment != "Other") %>% 
   mutate(
     Treatment = factor(Treatment,
                        levels = c("Natural darkness (Phase I)", 
@@ -1267,25 +1277,30 @@ pca_scores_filtered <- pca_scores %>%
     Site = factor(Site)
   )
 
+# Check that all sites are present in the filtered data
 cat("\nSites included in the final plot data:\n")
 print(table(pca_scores_filtered$Site))
 cat("\n")
 
+# PCA plot (color=Treatment, shape=Site)
 p3 <- ggplot(pca_scores_filtered, aes(x = PC1, y = PC2, color = Treatment, shape = Site)) +
   geom_point(size = 2, alpha = 0.7) +
+  # Ellipse is grouped by Treatment (the color variable)
   stat_ellipse(aes(group = Treatment), level = 0.95, linetype = 2, size = 1) + 
-  scale_color_manual(values = Treatment_colors) +
-  scale_shape_manual(values = Site_shapes) +
+  scale_color_manual(values = Treatment_colors) + # Use Treatment colors
+  scale_shape_manual(values = Site_shapes) +      # Use Site shapes
   theme_bw() +
   labs(
     x = paste0("PC1 (", sprintf("%.1f", var_explained[1]), "%)"),
     y = paste0("PC2 (", sprintf("%.1f", var_explained[2]), "%)"),
     color = "Treatment", 
-    shape = "Site"
+    shape = "Site"       
   ) +
   facet_wrap(~ Treatment, ncol = 3)
 
 print(p3)
 
-ggsave("Full_OSP_25_26_27_PCA.jpeg", plot = p3, width = 10, height = 3.5, dpi = 300)
+# Updated filename to be more accurate
+ggsave("Full_OSP_25_26_27_with_sites.jpeg", plot = p3, width = 10, height = 3.5, dpi = 300)
+
 ```
