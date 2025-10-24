@@ -1017,3 +1017,161 @@ ggsave("27.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.jpeg", plot = final_p
 
 cat("Plot saved as 27.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.jpeg\n")
 ```
+
+## PCAs for all Old Sneed Park dates
+
+```
+library(stringr)
+library(corrplot)
+library(caret)
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+
+# ===============================
+# 🧩 Data Loading
+# ===============================
+# Load data
+Full_OSP_26_2024 <- read.csv("OSP_26_08_24_full_alpha_acoustic_indices_results.csv")
+Full_OSP_25_2025 <- read.csv("OSP_25_08_25_full_alpha_acoustic_indices_results.csv")
+Full_OSP_27_2025 <- read.csv("OSP_27_08_25_full_alpha_acoustic_indices_results.csv")
+
+# Merge all data sets into one
+merged_data <- rbind(Full_OSP_26_2024, Full_OSP_25_2025, Full_OSP_27_2025)
+head(merged_data)
+
+# ===============================
+# ⚙️ Numeric Data Preparation for PCA
+# ===============================
+# Subset numeric columns
+numeric_data <- merged_data[, 2:61]
+
+# --- FIX #1: Remove Zero-Variance Columns FIRST ---
+nzv_indices <- nearZeroVar(numeric_data, saveMetrics = FALSE)
+if (length(nzv_indices) > 0) {
+  cat("Removing", length(nzv_indices), "zero-variance columns:\n")
+  cat(paste(colnames(numeric_data)[nzv_indices], collapse = ", "), "\n")
+  numeric_data <- numeric_data[, -nzv_indices, drop = FALSE]
+} else {
+  cat("✅ No zero-variance columns found.\n")
+}
+
+# --- FIX #2: Remove Highly Correlated Features ---
+if (ncol(numeric_data) > 1) {
+  cor_matrix <- cor(numeric_data, use = "complete.obs")
+  high_corr_indices <- findCorrelation(cor_matrix, cutoff = 0.8, names = TRUE)
+  
+  if (length(high_corr_indices) > 0) {
+    cat("Removing", length(high_corr_indices), "highly correlated columns:\n")
+    cat(paste(high_corr_indices, collapse = ", "), "\n")
+    numeric_data <- numeric_data[, !colnames(numeric_data) %in% high_corr_indices, drop = FALSE]
+  } else {
+    cat("✅ No highly correlated features to remove.\n")
+  }
+}
+
+cat("✅ Final numeric columns for PCA:", ncol(numeric_data), "\n")
+if (ncol(numeric_data) < 2) {
+  stop("Not enough numeric columns with variation left for PCA. Check your data.")
+}
+
+# ===============================
+# 🕒 Metadata Preparation
+# ===============================
+metadata <- data.frame(Filename = merged_data$filename)
+
+metadata <- metadata %>%
+  mutate(
+    # Extract OSP_25, OSP_26, or OSP_27
+    Site = str_extract(Filename, "OSP_25|OSP_26|OSP_27"),
+    datetime_str = str_extract(Filename, "\\d{8}_\\d{6}"),
+    Datetime = as.POSIXct(datetime_str, format = "%Y%m%d_%H%M%S", tz = "UTC")
+  )
+
+# ===============================
+# # Add Treatment Periods (UPDATED SECTION)
+# ===============================
+metadata <- metadata %>%
+  mutate(
+    Treatment = case_when(
+      # OSP_25 Treatments (2025-08-25 to 2025-08-26)
+      (Datetime >= ymd_hms("2025-08-25 21:11:00") & Datetime < ymd_hms("2025-08-25 22:11:00")) ~ "Natural darkness (Phase I)",
+      (Datetime >= ymd_hms("2025-08-25 22:11:00") & Datetime < ymd_hms("2025-08-25 23:11:00")) ~ "Light treatment (Phase II)",
+      (Datetime >= ymd_hms("2025-08-25 23:11:00") & Datetime < ymd_hms("2025-08-26 00:11:00")) ~ "Natural darkness (Phase III)",
+      
+      # OSP_26 Treatments (2024-08-26 to 2024-08-27)
+      (Datetime >= ymd_hms("2024-08-26 21:08:00") & Datetime < ymd_hms("2024-08-26 22:08:00")) ~ "Natural darkness (Phase I)",
+      (Datetime >= ymd_hms("2024-08-26 22:08:00") & Datetime < ymd_hms("2024-08-26 23:08:00")) ~ "Light treatment (Phase II)",
+      (Datetime >= ymd_hms("2024-08-26 23:08:00") & Datetime < ymd_hms("2024-08-27 00:08:00")) ~ "Natural darkness (Phase III)",
+      
+      # OSP_27 Treatments (2025-08-27 to 2025-08-28)
+      (Datetime >= ymd_hms("2025-08-27 21:07:00") & Datetime < ymd_hms("2025-08-27 22:07:00")) ~ "Natural darkness (Phase I)",
+      (Datetime >= ymd_hms("2025-08-27 22:07:00") & Datetime < ymd_hms("2025-08-27 23:07:00")) ~ "Light treatment (Phase II)",
+      (Datetime >= ymd_hms("2025-08-27 23:07:00") & Datetime < ymd_hms("2025-08-28 00:07:00")) ~ "Natural darkness (Phase III)",
+      
+      TRUE ~ "Other"
+    )
+  )
+
+# ===============================
+# 📊 PCA Analysis
+# ===============================
+set.seed(123)
+pca_res <- prcomp(numeric_data, center = TRUE, scale. = TRUE)
+print(summary(pca_res))
+
+# Variance explained
+var_explained <- round(100 * (pca_res$sdev^2 / sum(pca_res$sdev^2)), 1)
+
+# Combine PCA scores with metadata
+pca_scores <- as.data.frame(pca_res$x)
+pca_scores$Site <- metadata$Site
+pca_scores$Treatment <- metadata$Treatment
+
+# ===============================
+# 🎨 PCA Plots with Treatment Colors & Site Shapes
+# ===============================
+Treatment_colors <- c(
+  "Natural darkness (Phase I)" = "gray60",
+  "Light treatment (Phase II)" = "#FFC300",
+  "Natural darkness (Phase III)" = "gray60"
+)
+
+Site_shapes <- c(
+  "OSP_25" = 16,  # circle
+  "OSP_26" = 15,  # square
+  "OSP_27" = 17   # triangle
+)
+
+pca_scores_filtered <- pca_scores %>%
+  filter(Treatment != "Other") %>%
+  mutate(
+    Treatment = factor(Treatment,
+                       levels = c("Natural darkness (Phase I)", 
+                                  "Light treatment (Phase II)", 
+                                  "Natural darkness (Phase III)")),
+    Site = factor(Site)
+  )
+
+cat("\nSites included in the final plot data:\n")
+print(table(pca_scores_filtered$Site))
+cat("\n")
+
+p3 <- ggplot(pca_scores_filtered, aes(x = PC1, y = PC2, color = Treatment, shape = Site)) +
+  geom_point(size = 2, alpha = 0.7) +
+  stat_ellipse(aes(group = Treatment), level = 0.95, linetype = 2, size = 1) + 
+  scale_color_manual(values = Treatment_colors) +
+  scale_shape_manual(values = Site_shapes) +
+  theme_bw() +
+  labs(
+    x = paste0("PC1 (", sprintf("%.1f", var_explained[1]), "%)"),
+    y = paste0("PC2 (", sprintf("%.1f", var_explained[2]), "%)"),
+    color = "Treatment", 
+    shape = "Site"
+  ) +
+  facet_wrap(~ Treatment, ncol = 3)
+
+print(p3)
+
+ggsave("Full_OSP_25_26_27_PCA.jpeg", plot = p3, width = 10, height = 3.5, dpi = 300)
+```
