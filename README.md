@@ -1199,8 +1199,8 @@ metadata <- data.frame(Filename = merged_data$filename)
 
 metadata <- metadata %>%
   mutate(
-    # <-- FIX: Updated regex to capture OSP_26 as well
-    Site = str_extract(Filename, "OSP_\\d{2}"), 
+    # FIX: Use a simple regex to extract just OSP_25 or OSP_27
+    Site = str_extract(Filename, "OSP_25|OSP_27"),
     datetime_str = str_extract(Filename, "\\d{8}_\\d{6}"),
     Datetime = as.POSIXct(datetime_str, format = "%Y%m%d_%H%M%S", tz = "UTC")
   )
@@ -1217,10 +1217,9 @@ metadata <- metadata %>%
       (Datetime >= ymd_hms("2025-08-25 23:11:00") & Datetime < ymd_hms("2025-08-26 00:11:00")) ~ "Natural darkness (Phase III)",
       
       # OSP_26 Treatments (2024-08-26 to 2024-08-27)
-      # <-- FIX: Changed years from 2025 to 2024
-      (Datetime >= ymd_hms("2024-08-26 21:08:00") & Datetime < ymd_hms("2024-08-26 22:08:00")) ~ "Natural darkness (Phase I)",
-      (Datetime >= ymd_hms("2024-08-26 22:08:00") & Datetime < ymd_hms("2024-08-26 23:08:00")) ~ "Light treatment (Phase II)",
-      (Datetime >= ymd_hms("2024-08-26 23:08:00") & Datetime < ymd_hms("2024-08-27 00:08:00")) ~ "Natural darkness (Phase III)",
+      (Datetime >= ymd_hms("2025-08-26 21:08:00") & Datetime < ymd_hms("2024-08-26 22:08:00")) ~ "Natural darkness (Phase I)",
+      (Datetime >= ymd_hms("2025-08-26 22:08:00") & Datetime < ymd_hms("2024-08-26 23:08:00")) ~ "Light treatment (Phase II)",
+      (Datetime >= ymd_hms("2025-08-26 23:08:00") & Datetime < ymd_hms("2024-08-27 00:08:00")) ~ "Natural darkness (Phase III)",
       
       # OSP_27 Treatments (2025-08-27 to 2025-08-28)
       (Datetime >= ymd_hms("2025-08-27 21:07:00") & Datetime < ymd_hms("2025-08-27 22:07:00")) ~ "Natural darkness (Phase I)",
@@ -1242,6 +1241,17 @@ print(summary(pca_res))
 # Variance explained
 var_explained <- round(100 * (pca_res$sdev^2 / sum(pca_res$sdev^2)), 1)
 
+# Calculate Eigenvalues
+# Eigenvalues are the square of the standard deviations (sdev)
+eigenvalues <- pca_res$sdev^2
+
+# Name them for a clean output
+names(eigenvalues) <- paste0("PC", 1:length(eigenvalues))
+
+cat("--- Eigenvalues for each Component ---\n")
+print(eigenvalues)
+cat("\n")
+
 # Combine PCA scores with metadata
 pca_scores <- as.data.frame(pca_res$x)
 pca_scores$Site <- metadata$Site
@@ -1258,17 +1268,14 @@ Treatment_colors <- c(
 )
 
 # Define shapes for Sites
-# <-- FIX: Added OSP_26 to the shapes list
 Site_shapes <- c(
   "OSP_25" = 16,  # circle
-  "OSP_26" = 15,  # square
   "OSP_27" = 17   # triangle
 )
 
 # Filter data for plotting
 pca_scores_filtered <- pca_scores %>%
-  # <-- FIX: Explicitly call dplyr::filter
-  dplyr::filter(Treatment != "Other") %>% 
+  filter(Treatment != "Other") %>%
   mutate(
     Treatment = factor(Treatment,
                        levels = c("Natural darkness (Phase I)", 
@@ -1277,7 +1284,7 @@ pca_scores_filtered <- pca_scores %>%
     Site = factor(Site)
   )
 
-# Check that all sites are present in the filtered data
+# Check that both sites are present in the filtered data
 cat("\nSites included in the final plot data:\n")
 print(table(pca_scores_filtered$Site))
 cat("\n")
@@ -1288,7 +1295,7 @@ p3 <- ggplot(pca_scores_filtered, aes(x = PC1, y = PC2, color = Treatment, shape
   # Ellipse is grouped by Treatment (the color variable)
   stat_ellipse(aes(group = Treatment), level = 0.95, linetype = 2, size = 1) + 
   scale_color_manual(values = Treatment_colors) + # Use Treatment colors
-  scale_shape_manual(values = Site_shapes) +      # Use Site shapes
+  scale_shape_manual(values = Site_shapes) +     # Use Site shapes
   theme_bw() +
   labs(
     x = paste0("PC1 (", sprintf("%.1f", var_explained[1]), "%)"),
@@ -1300,7 +1307,113 @@ p3 <- ggplot(pca_scores_filtered, aes(x = PC1, y = PC2, color = Treatment, shape
 
 print(p3)
 
-# Updated filename to be more accurate
-ggsave("Full_OSP_25_26_27_with_sites.jpeg", plot = p3, width = 10, height = 3.5, dpi = 300)
+ggsave("Full_OSP_25_and_27_with_sites.jpeg", plot = p3, width = 10, height = 3.5, dpi = 300)
+
+
+#### Scree plot ####
+
+# ===============================
+# 📊 Scree Plot Visualization
+# ===============================
+
+# Make sure ggplot2 is loaded
+library(ggplot2)
+
+# 1. Create a data frame with the PCA variance information
+# We use the 'pca_res' object from the previous script
+pca_variance <- data.frame(
+  Component = paste0("PC", 1:length(pca_res$sdev)),
+  VarianceExplained = 100 * (pca_res$sdev^2 / sum(pca_res$sdev^2))
+)
+
+# Calculate cumulative variance
+pca_variance$CumulativeVariance <- cumsum(pca_variance$VarianceExplained)
+
+# Ensure components are in the correct order for plotting
+pca_variance$Component <- factor(pca_variance$Component, 
+                                 levels = pca_variance$Component)
+
+# ===============================
+# Plot 1: Classic Scree Plot (Bar Chart)
+# ===============================
+# This helps you find the "elbow"
+scree_plot_classic <- ggplot(pca_variance, aes(x = Component, y = VarianceExplained, group = 1)) +
+  geom_col(fill = "steelblue", alpha = 0.8) +
+  geom_point(size = 2, color = "darkred") +
+  geom_line(color = "darkred", linetype = "dashed") +
+  theme_bw() +
+  labs(
+    title = "Scree Plot",
+    x = "Principal Component",
+    y = "Percentage of Variance Explained"
+  ) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+
+print(scree_plot_classic)
+
+# ===============================
+# Plot 2: Scree Plot with Cumulative Variance (Pareto Plot)
+# ===============================
+# This helps you decide how many components to keep
+scree_plot_cumulative <- ggplot(pca_variance, aes(x = Component)) +
+  # Bar plot for individual variance
+  geom_col(aes(y = VarianceExplained), fill = "steelblue", alpha = 0.8) +
+  
+  # Line and point plot for cumulative variance
+  geom_point(aes(y = CumulativeVariance), size = 2, color = "darkred") +
+  geom_line(aes(y = CumulativeVariance, group = 1), color = "darkred", linetype = "dashed") +
+  
+  # Add a horizontal line at 80% or 90% for reference
+  geom_hline(yintercept = 80, linetype = "dotted", color = "black", size = 1) +
+  
+  # Use a secondary y-axis to show cumulative percentage
+  scale_y_continuous(
+    name = "Percentage of variance explained",
+    sec.axis = sec_axis(~., name = "Cumulative variance (%)")
+  ) +
+  theme_bw() +
+  labs(
+    x = "Principal component",
+    y = "Percentage of variance explained"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 60, hjust = 1),
+    axis.title.y.right = element_text(color = "darkred"),
+    axis.text.y.right = element_text(color = "darkred")
+  )
+
+print(scree_plot_cumulative)
+
+# Save your preferred plot
+# ggsave("PCA_Scree_Plot.jpeg", plot = scree_plot_classic, width = 8, height = 5, dpi = 300)
+ggsave("PCA_Scree_Plot_Cumulative.jpeg", plot = scree_plot_cumulative, width = 8, height = 5, dpi = 300)
+
+#### PCA loadings ####
+
+# ===============================
+# 📊 PCA Loadings Extraction (FULL MATRIX)
+# ===============================
+library(dplyr)
+# tidyr is no longer needed since the second section is removed.
+
+# 1. Extract the raw loadings matrix
+# This matrix contains the correlation of each original variable (row) 
+# with each Principal Component (column).
+loadings_matrix <- pca_res$rotation
+
+# Convert to a data frame and add the variable names
+loadings_df <- as.data.frame(loadings_matrix) %>%
+  mutate(Acoustic_Index = rownames(.)) %>%
+  relocate(Acoustic_Index)
+
+# Display the full, un-filtered loadings matrix
+loadings_full_matrix <- loadings_df
+
+cat("--- Full PCA Loadings Matrix (All Indices vs. All Components) ---\n")
+# Note: Since this is a wide table, R may truncate the output columns
+print(loadings_full_matrix)
+cat("\n")
+
+head(loadings_full_matrix)
 
 ```
