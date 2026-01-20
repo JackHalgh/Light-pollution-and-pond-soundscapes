@@ -6,31 +6,30 @@
 #By Jack A. Greenhalgh, June, 2025.
 #Department of Biology, McGill University, 1205 Dr Penfield Ave, Montreal, Quebec, H3A 1B1, Canada.
 # =============================================
-# Acoustic Indices Batch Processing Script
-# Robust for Spyder and Command Line
-# Supports optional spectrogram cropping AND index frequency parameters
-# Prints summary of acoustic indices at the end
+# Acoustic Spectral Indices Batch Processing Script
+# Spectral indices ONLY (100–48000 Hz)
+# Spyder-safe parallelization
 # =============================================
 
 import os
+import numpy as np
 import pandas as pd
 from maad import sound
 import maad.features.alpha_indices as ai
 from tqdm import tqdm
 
 # =============================
-# Detect environment and choose executor
+# Detect environment and choose executor (FIX A)
 # =============================
 def in_spyder():
-    """Detect if running inside Spyder"""
     return 'SPYDER_ARGS' in os.environ or 'SPYDER_PID' in os.environ
 
 if in_spyder():
     from concurrent.futures import ThreadPoolExecutor as Executor
-    use_threads = True
+    EXECUTOR_NAME = "Threads (Spyder-safe)"
 else:
     from concurrent.futures import ProcessPoolExecutor as Executor
-    use_threads = False
+    EXECUTOR_NAME = "Processes"
 
 from concurrent.futures import as_completed
 
@@ -40,405 +39,311 @@ from concurrent.futures import as_completed
 NFFT = 1024
 noverlap = 512
 window = 'hann'
-temporal_threshold_db = -85
 
-# Frequency range for spectral indices
-# These parameters are passed directly to the spectral index functions
-spectral_fmin = 0
+spectral_fmin = 100
 spectral_fmax = 48000
 
-# Frequency range for optional spectrogram subset
-# Only used if subset_spectrogram = True
-spectrogram_fmin = 0
-spectrogram_fmax = 48000
-
-# Option to manually subset spectrogram before index calculation
-subset_spectrogram = True  # Set True to crop Sxx manually
-
-# Main directory
-main_directory = r"C:\Users\Administrador\Downloads\Light pollution sound files\OSP_26.08.2024"
+main_directory = r"D:\Light pollution\Python"
 
 # =============================
 # File Processing Function
 # =============================
 def process_file(foldername, folder_path, filename):
-    """Compute spectral and temporal alpha indices for a single .wav file"""
+    """Compute spectral alpha indices for a single .wav file (inclusive of zero-energy cases)"""
     filepath = os.path.join(folder_path, filename)
+
     try:
+        # Load audio
         s, fs = sound.load(filepath)
         if s is None or len(s) == 0:
             raise ValueError("Empty or invalid audio file")
 
-        # Compute full spectrogram
+        # Compute spectrogram
         Sxx_power, tn, fn, _ = sound.spectrogram(
-            s, fs, window=window, nperseg=NFFT, noverlap=noverlap
+            s,
+            fs,
+            window=window,
+            nperseg=NFFT,
+            noverlap=noverlap
         )
 
-        # Optional manual cropping of spectrogram
-        if subset_spectrogram:
-            freq_mask = (fn >= spectrogram_fmin) & (fn <= spectrogram_fmax)
-            if freq_mask.sum() == 0:
-                raise ValueError(f"No frequencies found in range {spectrogram_fmin}-{spectrogram_fmax} Hz")
-            Sxx_power = Sxx_power[freq_mask, :]
-            fn = fn[freq_mask]
-
-        # Compute spectral indices using spectral_fmin/spectral_fmax as function parameters
-        spectral = ai.all_spectral_alpha_indices(
-            Sxx_power, tn, fn, fmin=spectral_fmin, fmax=spectral_fmax
+        # Compute spectral indices (band-limited internally)
+        spectral_df, _ = ai.all_spectral_alpha_indices(
+            Sxx_power,
+            tn,
+            fn,
+            fmin=spectral_fmin,
+            fmax=spectral_fmax
         )
-        spectral_dict = spectral[0].iloc[0].to_dict()
 
-        # Compute temporal indices
-        temporal = ai.all_temporal_alpha_indices(s, fs, threshold=temporal_threshold_db)
-        temporal_dict = temporal.iloc[0].to_dict()
+        # Force inclusion even if values are NaN (e.g., zero-energy band)
+        spectral_dict = spectral_df.iloc[0].to_dict()
+        spectral_dict["filename"] = f"{foldername}_{filename}"
 
-        # Combine results
-        combined = {**spectral_dict, **temporal_dict}
-        combined['filename'] = f"{foldername}_{filename}"
-        return combined
+        return spectral_dict
 
     except Exception as e:
+        # Still return a row so the file is represented in output
         print(f"⚠ Error processing {filename} in {foldername}: {e}")
-        return None
+
+        return {
+            "filename": f"{foldername}_{filename}",
+            "ERROR": str(e)
+        }
 
 # =============================
 # Main Script
 # =============================
 def main():
-    foldernames = [f for f in os.listdir(main_directory)
-                   if os.path.isdir(os.path.join(main_directory, f))]
-    
+    foldernames = [
+        f for f in os.listdir(main_directory)
+        if os.path.isdir(os.path.join(main_directory, f))
+    ]
+
     if not foldernames:
-        print(f"⚠ No sub-folders found in main directory:\n{main_directory}")
+        print(f"⚠ No sub-folders found in:\n{main_directory}")
         return
 
     for foldername in foldernames:
         folder_path = os.path.join(main_directory, foldername)
         print(f"\n🎧 Processing folder: {foldername}")
-        results = []
+        print(f"Using {EXECUTOR_NAME} for parallel processing")
 
-        wav_files = [f for f in os.listdir(folder_path) if f.lower().endswith('.wav')]
+        wav_files = [
+            f for f in os.listdir(folder_path)
+            if f.lower().endswith(".wav")
+        ]
+
         if not wav_files:
             print(f"⚠ No .wav files found in {folder_path}")
             continue
 
-        executor_type = "Threads" if use_threads else "Processes"
-        print(f"Using {executor_type} for parallel processing")
+        results = []
 
         with Executor() as executor:
-            futures = {executor.submit(process_file, foldername, folder_path, f): f for f in wav_files}
+            futures = {
+                executor.submit(process_file, foldername, folder_path, f): f
+                for f in wav_files
+            }
 
-            for future in tqdm(as_completed(futures), total=len(futures), desc=f"Files in {foldername}"):
-                result = future.result()
-                if result:
-                    results.append(result)
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc=f"Files in {foldername}"
+            ):
+                results.append(future.result())
 
-        if results:
-            df = pd.DataFrame(results)
+        # Build DataFrame (keep all rows)
+        df = pd.DataFrame(results)
 
-            # Reorder columns
-            cols = ['filename'] + [c for c in df.columns if c != 'filename']
-            df = df[cols].sort_values(by='filename').reset_index(drop=True)
+        # Ensure filename first
+        cols = ["filename"] + [c for c in df.columns if c != "filename"]
+        df = df[cols].sort_values("filename").reset_index(drop=True)
 
-            # Ensure numeric columns
-            df = df.apply(pd.to_numeric, errors='ignore')
+        # Convert numeric columns where possible
+        df = df.apply(pd.to_numeric, errors="ignore")
 
-            # Save CSV
-            output_csv = os.path.join(folder_path, f"{foldername}_full_alpha_acoustic_indices_results.csv")
-            df.to_csv(output_csv, index=False, encoding='utf-8-sig')
-            print(f"✔ Results saved for folder '{foldername}' at:\n{output_csv}")
-        else:
-            print(f"⚠ No audio files processed successfully in folder '{foldername}'.")
+        # Save CSV
+        output_csv = os.path.join(
+            folder_path,
+            f"{foldername}_100_48000_spectral_alpha_indices.csv"
+        )
 
-# =============================
-# Acoustic indices summary table
-# =============================
-def print_acoustic_indices_summary():
-    """
-    Print a summary table of the acoustic indices used,
-    their key parameters, and a brief description.
-    """
-    data = [
-        ["VARf", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Variance of the frequency bins in the spectrogram"],
-        ["KURTf", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Kurtosis of the frequency distribution of the spectrogram"],
-        ["NBPEAKS", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Number of spectral peaks in the frequency range"],
-        ["BGNf", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Background noise estimate of the frequency spectrum"],
-        ["EAS", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Acoustic entropy across frequency bins"],
-        ["ECV", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Coefficient of variation of the energy across frequency bins"],
-        ["EPS", f"threshold={temporal_threshold_db} dB", "Entropy of the temporal amplitude signal"],
-        ["EPS_KURT", f"threshold={temporal_threshold_db} dB", "Kurtosis of temporal entropy"],
-        ["ACI", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Acoustic Complexity Index, measuring amplitude variation across time and frequency"],
-        ["rBA", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Relative Bioacoustic Index, normalized energy in the frequency band"],
-        ["BI", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Bioacoustic Index, measures total energy in the band"],
-        ["ADI", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Acoustic Diversity Index, reflects the number of frequency bins with significant activity"],
-        ["EVNspMean", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Mean of the Event-based Normalized Spectrogram"],
-        ["TFSD", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Temporal Frequency Spectrum Density"],
-        ["RAOQ", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Rao's Quadratic Entropy, diversity index in frequency domain"],
-        ["AGI", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Acoustic Grouping Index, measures clustering of acoustic events"],
-        ["aROI", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Acoustic Region of Interest index, energy in a specific band"],
-        ["MEANt", f"threshold={temporal_threshold_db} dB", "Mean amplitude of temporal signal above threshold"],
-        ["SKEWt", f"threshold={temporal_threshold_db} dB", "Skewness of temporal amplitude distribution"],
-        ["KURTt", f"threshold={temporal_threshold_db} dB", "Kurtosis of temporal amplitude distribution"],
-        ["Ht", f"threshold={temporal_threshold_db} dB", "Shannon entropy of the temporal signal"],
-        ["EVNtMean", f"threshold={temporal_threshold_db} dB", "Mean of temporal event-based normalized signal"],
-        ["EVNtCount", f"threshold={temporal_threshold_db} dB", "Count of temporal events above threshold"]
-    ]
-
-    df_summary = pd.DataFrame(data, columns=["Index", "Parameters", "Description"])
-    print("\n🎶 Acoustic Indices Summary Table")
-    print(df_summary.to_string(index=False))
-
-    # Optional: save summary table to CSV in main directory
-    try:
-        summary_csv = os.path.join(main_directory, "full_acoustic_indices_summary.csv")
-        df_summary.to_csv(summary_csv, index=False, encoding='utf-8-sig')
-        print(f"\n✔ Acoustic indices summary saved as CSV at:\n{summary_csv}")
-    except Exception as e:
-        print(f"\n⚠ Could not save summary CSV to main directory: {e}")
-
+        df.to_csv(output_csv, index=False, encoding="utf-8-sig")
+        print(f"✔ Results saved at:\n{output_csv}")
 
 # =============================
-# SCRIPT EXECUTION
+# Script Execution
 # =============================
 if __name__ == "__main__":
     main()
-    print_acoustic_indices_summary()
+
 ```
 
 ## Analysis of acoustic indices data (R Studio) 
 
 ```
-#By Jack A. Greenhalgh, June, 2025.
-#Department of Biology, McGill University, 1205 Dr Penfield Ave, Montreal, Quebec, H3A 1B1, Canada.
-
-# Load required packages
-library(corrplot)
-library(caret)
-library(car)   
+# ============================
+# 1. Load required packages
+# ============================
 library(dplyr)
-library(purrr)
-library(FSA)     
-library(tidyr)
+library(stringr)
 library(ggplot2)
-library(forcats)
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(corrr)
+library(caret)
+library(purrr)
 
-#### Loading, cleaning, and scaling data ####
+# ============================
+# 2. Read and combine CSV files
+# ============================
+dir_path <- "D:/Light pollution/2.5 kHz - 4.0 kHz niche space"
 
-data <- read.csv("Light pollution full results (1 kHz, 10 kHz).csv")
-head(data)
+csv_files <- list.files(path = dir_path, pattern = "\\.csv$", full.names = TRUE)
+data_list <- lapply(csv_files, read.csv, stringsAsFactors = FALSE)
+names(data_list) <- tools::file_path_sans_ext(basename(csv_files))
 
-# Remove any leading/trailing whitespace in Treatment
-data$Treatment <- trimws(data$Treatment)
+combined_df <- bind_rows(data_list, .id = "source_file")
 
-# Extract Site and Treatment into a separate object
-site_treatment <- data[, c("Site", "Treatment")]
+# ============================
+# 3. Clean and format metadata
+# ============================
+combined_df <- combined_df %>%
+  mutate(
+    Treatment = str_trim(Treatment),
+    Treatment = factor(Treatment, levels = c("Phase I", "Phase II", "Phase III")),
+    Site = factor(Site),
+    Sampling.date = factor(Sampling.date)
+  )
 
-# Subset numeric columns from 4 to 63
-numeric_data <- data[, 4:63]
+# ============================
+# 4. Remove highly correlated indices (>0.8)
+# ============================
+numeric_vars <- combined_df %>% select(where(is.numeric))
+cor_matrix <- cor(numeric_vars, use = "pairwise.complete.obs")
 
-# Compute correlation matrix
-cor_matrix <- cor(numeric_data, use = "complete.obs")
+high_cor <- findCorrelation(cor_matrix, cutoff = 0.8, verbose = TRUE, names = TRUE)
+acoustic_df <- numeric_vars %>% select(-all_of(high_cor))
 
-# Plot correlation matrix
-corrplot(cor_matrix, method = "color", type = "upper", 
-         tl.cex = 0.7, tl.col = "black", addCoef.col = "black", number.cex = 0.5)
-
-# Print the correlation matrix
-print(cor_matrix)
-
-# Find indices of highly correlated variables (threshold > 0.8)
-high_corr_indices <- findCorrelation(cor_matrix, cutoff = 0.8, names = TRUE)
-
-# Remove them from the dataset
-filtered_data <- numeric_data[, !colnames(numeric_data) %in% high_corr_indices]
-
-# Print the names of variables that were removed
-print(high_corr_indices)
-
-# Print the names of variables that have been kept
-kept_variables <- colnames(filtered_data)
-print(kept_variables)
-
-# Z-transform the filtered_data
-filtered_data_z <- as.data.frame(scale(filtered_data))
-summary(filtered_data_z)
-
-# Add Site and Treatment back to filtered_data
-filtered_data_z <- cbind(site_treatment, filtered_data_z)
-head(filtered_data_z)
-
-##### Testing for normality #####
-
-# Identify numeric variables
-numeric_vars <- sapply(filtered_data_z, is.numeric)
-
-# Apply Shapiro-Wilk test to each numeric variable
-shapiro_results <- sapply(filtered_data_z[, numeric_vars], function(x) {
-  if (length(unique(x)) >= 3) {
-    shapiro.test(x)$p.value
-  } else {
-    NA  # Too few unique values for test
-  }
-})
-
-# Format into a dataframe
-shapiro_df <- data.frame(
-  Variable = names(shapiro_results),
-  Shapiro_p_value = shapiro_results,
-  Normality = ifelse(shapiro_results > 0.05, "Yes", "No")
+combined_clean <- bind_cols(
+  combined_df %>% select(source_file, filename, Site, Sampling.date, Treatment),
+  acoustic_df
 )
 
-print(shapiro_df)
+# ============================
+# 5. Z-standardize acoustic indices
+# ============================
+combined_clean <- combined_clean %>%
+  mutate(across(where(is.numeric), ~ scale(.)[, 1]))
 
-#### Testing for equal or unequal variance between treatment groups ####
+# ============================
+# 6. Fit linear mixed-effects models
+# ============================
+acoustic_indices <- colnames(acoustic_df)
+results_list <- list()
 
-# Ensure Treatment is a factor
-filtered_data_z$Treatment <- as.factor(filtered_data_z$Treatment)
-
-# Get only the numeric columns (exclude Site and Treatment)
-numeric_vars <- filtered_data_z %>%
-  select(where(is.numeric)) %>%
-  colnames()
-
-# Apply Levene's Test to each variable
-levene_results <- lapply(numeric_vars, function(var) {
-  formula <- as.formula(paste(var, "~ Treatment"))
-  test <- leveneTest(formula, data = filtered_data_z)
-  data.frame(
-    Variable = var,
-    F = test$`F value`[1],
-    p_value = test$`Pr(>F)`[1]
-  )
-})
-
-# Combine results into a single data frame
-levene_results_df <- do.call(rbind, levene_results)
-
-# View results
-print(levene_results_df)
-
-#### Kruskal-Wallis for Each Variable by Treatment within Site #####
-
-# Normalize Treatment names completely (optional)
-filtered_data_z <- filtered_data_z %>%
-  mutate(Treatment = tolower(trimws(Treatment)))  # All lowercase, no whitespace
-
-# Check for NA values in the Treatment column
-sum(is.na(filtered_data_z$Treatment))
-
-#Check treatment names are correct
-unique(filtered_data_z$Treatment) %>% print()
-
-# Variables to test
-variables_to_test <- setdiff(names(filtered_data_z), c("Site", "Treatment"))
-
-# Initialize results list
-full_results <- list()
-
-# Loop through each site
-for (site_name in unique(filtered_data_z$Site)) {
-  
-  # Subset data for current site
-  site_data <- filtered_data_z %>% filter(Site == site_name)
-  
-  # Loop through each variable
-  for (var in variables_to_test) {
-    
-    # Run Kruskal-Wallis
-    formula <- as.formula(paste(var, "~ Treatment"))
-    kruskal <- kruskal.test(formula, data = site_data)
-    
-    # Store Kruskal result
-    base_result <- tibble(
-      Site = site_name,
-      Variable = var,
-      KW_statistic = kruskal$statistic,
-      KW_p_value = kruskal$p.value,
-      Significant = ifelse(kruskal$p.value < 0.05, "Yes", "No")
-    )
-    
-    # If significant, run Dunn's test
-    if (kruskal$p.value < 0.05) {
-      dunn <- dunnTest(formula, data = site_data, method = "bonferroni")
-      dunn_df <- as_tibble(dunn$res)
-      
-      # Extract treatment pairs, direction, and p-values
-      dunn_df <- dunn_df %>%
-        separate(Comparison, into = c("Group1", "Group2"), sep = " - ") %>%
-        mutate(Direction = map2_chr(Group1, Group2, function(g1, g2) {
-          med1 <- median(site_data[[var]][site_data$Treatment == g1])
-          med2 <- median(site_data[[var]][site_data$Treatment == g2])
-          if (med1 < med2) {
-            paste(g2, ">", g1)
-          } else if (med1 > med2) {
-            paste(g1, ">", g2)
-          } else {
-            "No difference"
-          }
-        })) %>%
-        select(Group1, Group2, Z = Z, P.adj = P.adj, Direction)
-      
-      # Join Kruskal and Dunn results
-      combined <- base_result %>%
-        crossing(dunn_df)  # one Kruskal result per posthoc row
-      
-    } else {
-      combined <- base_result
-    }
-    
-    # Store combined result
-    full_results[[paste(site_name, var, sep = "_")]] <- combined
-  }
+for (idx in acoustic_indices) {
+  formula <- as.formula(paste(idx, "~ Treatment * Site + (1 | Sampling.date)"))
+  mod <- lmer(formula, data = combined_clean)
+  results_list[[idx]] <- list(model = mod)
 }
 
-# Combine everything
-posthoc_results <- bind_rows(full_results)
+# ============================
+# 7. Extract effect sizes (BASELINE = Phase I)
+# ============================
+get_all_contrasts <- function(idx) {
+  mod <- results_list[[idx]]$model
+  emm <- emmeans(mod, ~ Treatment | Site)
+  
+  # Weights: Phase I, Phase II, Phase III
+  # Baseline is Phase I (-1). 
+  # Contrast 1: Phase II minus Phase I
+  # Contrast 2: Phase III minus Phase I
+  contr <- contrast(
+    emm,
+    method = list(
+      "Impact (Light vs Natural Dark)"   = c(-1,  1,  0), 
+      "Legacy (Recovery vs Natural Dark)" = c(-1,  0,  1)
+    ),
+    by = "Site",
+    infer = c(TRUE, TRUE)
+  )
+  
+  as.data.frame(contr) %>%
+    mutate(Index = idx)
+}
 
-# Preview
-print(posthoc_results)
+all_sites_effect_df <- map_dfr(acoustic_indices, get_all_contrasts)
 
-write.csv(posthoc_results, "posthoc_results.csv")
-
-##### Heat map of key variables #####
-
-library(dplyr)
-library(ggplot2)
-library(forcats)
-
-# Prepare and filter data for the specific comparison
-df_light_vs_pre <- posthoc_results %>%
-  filter(Group1 == "light treatment", Group2 == "pre-light treatment") %>%
+# ============================
+# 8. Categorize & Factor Formatting
+# ============================
+all_sites_effect_df <- all_sites_effect_df %>%
   mutate(
-    Comparison = "light vs pre-light",
-    Missing = ifelse(is.na(Z), "NA", "Data"),  # flag NA
-    Z = ifelse(is.na(Z), 0, Z),                # convert NA to 0 for plotting
-    Variable = factor(Variable, levels = unique(posthoc_results$Variable))
+    Category = case_when(
+      Index %in% c("ADI", "BI", "BioEnergy", "NDSI", "NBPEAKS", "rBA", "H_Havrda", "H_Renyi") ~ "Biophony & diversity",
+      Index %in% c("EAS", "ECU", "EPS_KURT", "KURTf") ~ "Complexity & entropy",
+      Index %in% c("AnthroEnergy", "LFC", "EVNspMean", "BGNf", "TFSD") ~ "Anthrophony & noise",
+      TRUE ~ "Other"
+    ),
+    # Lock the order of the baseline comparisons
+    contrast = factor(contrast, levels = c("Impact (Light vs Natural Dark)", "Legacy (Recovery vs Natural Dark)")),
+    sig = ifelse(p.value < 0.05, "*", "")
   )
 
-# Plot with gradient fill based on Z
-ggplot(df_light_vs_pre, aes(x = Z, y = Variable, fill = Z, alpha = Missing)) +
-  geom_col(width = 0.7, color = "black") +
-  facet_wrap(~ Site, scales = "fixed") +
-  scale_fill_gradient2(
-    low = "red",
-    mid = "white",
-    high = "blue",
-    midpoint = 0,
-    name = "Effect size (Z)"
-  ) +
-  scale_alpha_manual(values = c("Data" = 1, "NA" = 0.3), guide = FALSE) +
-  theme_bw(base_size = 12) +
-  theme(
-    axis.text.y = element_text(size = 9),
-    strip.text = element_text(face = "bold", size = 13),
-    legend.position = "bottom"
-  ) +
-  labs(
-    x = "Effect size (Z)",
-    y = "Acoustic index",
-    fill = "Effect size (Z)"
-  )
+# ============================
+# 9. Loop through Sites, Plot, and Export
+# ============================
+# Visual settings
+contrast_colors <- c("Impact (Light vs Natural Dark)" = "#FFC300", "Legacy (Recovery vs Natural Dark)" = "gray60")
+contrast_lines  <- c("Impact (Light vs Natural Dark)" = "solid",  "Legacy (Recovery vs Natural Dark)" = "dashed")
+unique_sites    <- unique(all_sites_effect_df$Site)
 
+for (current_site in unique_sites) {
+  
+  # 1. Filter and re-order data
+  site_data <- all_sites_effect_df %>% filter(Site == current_site)
+  site_index_order <- site_data %>%
+    group_by(Index) %>%
+    summarize(mean_est = mean(estimate)) %>%
+    arrange(mean_est) %>%
+    pull(Index)
+  
+  site_data$Index <- factor(site_data$Index, levels = site_index_order)
+  
+  # 2. Build Plot
+  p <- ggplot(site_data, aes(x = estimate, y = Index, color = contrast, linetype = contrast)) +
+    # Phase I baseline reference (0 line)
+    geom_vline(xintercept = 0, linetype = "dotted", color = "black", linewidth = 0.6) +
+    
+    geom_errorbarh(
+      aes(xmin = lower.CL, xmax = upper.CL),
+      height = 0.5, linewidth = 1.1,
+      position = position_dodge(width = 0.7)
+    ) +
+    
+    geom_point(size = 3.5, position = position_dodge(width = 0.7)) +
+    
+    geom_text(
+      aes(label = sig, x = upper.CL + 0.1), 
+      position = position_dodge(width = 0.7),
+      color = "#FFC300", size = 8, vjust = 0.7, show.legend = FALSE
+    ) +
+    
+    facet_grid(Category ~ ., scales = "free_y", space = "free_y") +
+    
+    scale_color_manual(values = contrast_colors) + 
+    scale_linetype_manual(values = contrast_lines) +
+    
+    theme_bw(base_size = 14) +
+    theme(
+      panel.grid.minor = element_blank(),
+      strip.background = element_rect(fill = "gray95"),
+      strip.text = element_text(face = "bold"),
+      legend.position = "bottom",
+      legend.title = element_blank()
+    ) +
+    labs(
+      title = paste("Site:", current_site, "(Baseline = Phase I)"),
+      x = "Standardized effect size (Relative to natural darkness)",
+      y = "Acoustic index"
+    )
+  
+  # 3. Export
+  full_save_path <- file.path(dir_path, paste0(current_site, "_Phase1Baseline_Plot.jpg"))
+  
+  ggsave(
+    filename = full_save_path,
+    plot = p,
+    device = "jpeg",
+    dpi = 300,
+    width = 10,
+    height = 12,
+    units = "in"
+  )
+}
 ```
 
 ### Light treatment vs pre-light treatment (1 kHz - 10 kHz) as shown by key acoustic indices
