@@ -6,30 +6,31 @@
 #By Jack A. Greenhalgh, June, 2025.
 #Department of Biology, McGill University, 1205 Dr Penfield Ave, Montreal, Quebec, H3A 1B1, Canada.
 # =============================================
-# Acoustic Spectral Indices Batch Processing Script
-# Spectral indices ONLY (100–48000 Hz)
-# Spyder-safe parallelization
+# Acoustic Indices Batch Processing Script
+# Robust for Spyder and Command Line
+# Supports optional spectrogram cropping AND index frequency parameters
+# Prints summary of acoustic indices at the end
 # =============================================
 
 import os
-import numpy as np
 import pandas as pd
 from maad import sound
 import maad.features.alpha_indices as ai
 from tqdm import tqdm
 
 # =============================
-# Detect environment and choose executor (FIX A)
+# Detect environment and choose executor
 # =============================
 def in_spyder():
+    """Detect if running inside Spyder"""
     return 'SPYDER_ARGS' in os.environ or 'SPYDER_PID' in os.environ
 
 if in_spyder():
     from concurrent.futures import ThreadPoolExecutor as Executor
-    EXECUTOR_NAME = "Threads (Spyder-safe)"
+    use_threads = True
 else:
     from concurrent.futures import ProcessPoolExecutor as Executor
-    EXECUTOR_NAME = "Processes"
+    use_threads = False
 
 from concurrent.futures import as_completed
 
@@ -39,125 +40,169 @@ from concurrent.futures import as_completed
 NFFT = 1024
 noverlap = 512
 window = 'hann'
+temporal_threshold_db = -85
 
-spectral_fmin = 100
-spectral_fmax = 48000
+# Frequency range for spectral indices
+# These parameters are passed directly to the spectral index functions
+spectral_fmin = 2000
+spectral_fmax = 4000
 
+# Frequency range for optional spectrogram subset
+# Only used if subset_spectrogram = True
+spectrogram_fmin = 2000
+spectrogram_fmax = 4000
+
+# Option to manually subset spectrogram before index calculation
+subset_spectrogram = True  # Set True to crop Sxx manually
+
+# Main directory
 main_directory = r"D:\Light pollution\Python"
 
 # =============================
 # File Processing Function
 # =============================
 def process_file(foldername, folder_path, filename):
-    """Compute spectral alpha indices for a single .wav file (inclusive of zero-energy cases)"""
+    """Compute spectral and temporal alpha indices for a single .wav file"""
     filepath = os.path.join(folder_path, filename)
-
     try:
-        # Load audio
         s, fs = sound.load(filepath)
         if s is None or len(s) == 0:
             raise ValueError("Empty or invalid audio file")
 
-        # Compute spectrogram
+        # Compute full spectrogram
         Sxx_power, tn, fn, _ = sound.spectrogram(
-            s,
-            fs,
-            window=window,
-            nperseg=NFFT,
-            noverlap=noverlap
+            s, fs, window=window, nperseg=NFFT, noverlap=noverlap
         )
 
-        # Compute spectral indices (band-limited internally)
-        spectral_df, _ = ai.all_spectral_alpha_indices(
-            Sxx_power,
-            tn,
-            fn,
-            fmin=spectral_fmin,
-            fmax=spectral_fmax
+        # Optional manual cropping of spectrogram
+        if subset_spectrogram:
+            freq_mask = (fn >= spectrogram_fmin) & (fn <= spectrogram_fmax)
+            if freq_mask.sum() == 0:
+                raise ValueError(f"No frequencies found in range {spectrogram_fmin}-{spectrogram_fmax} Hz")
+            Sxx_power = Sxx_power[freq_mask, :]
+            fn = fn[freq_mask]
+
+        # Compute spectral indices using spectral_fmin/spectral_fmax as function parameters
+        spectral = ai.all_spectral_alpha_indices(
+            Sxx_power, tn, fn, fmin=spectral_fmin, fmax=spectral_fmax
         )
+        spectral_dict = spectral[0].iloc[0].to_dict()
 
-        # Force inclusion even if values are NaN (e.g., zero-energy band)
-        spectral_dict = spectral_df.iloc[0].to_dict()
-        spectral_dict["filename"] = f"{foldername}_{filename}"
+        # Compute temporal indices
+        temporal = ai.all_temporal_alpha_indices(s, fs, threshold=temporal_threshold_db)
+        temporal_dict = temporal.iloc[0].to_dict()
 
-        return spectral_dict
+        # Combine results
+        combined = {**spectral_dict, **temporal_dict}
+        combined['filename'] = f"{foldername}_{filename}"
+        return combined
 
     except Exception as e:
-        # Still return a row so the file is represented in output
         print(f"⚠ Error processing {filename} in {foldername}: {e}")
-
-        return {
-            "filename": f"{foldername}_{filename}",
-            "ERROR": str(e)
-        }
+        return None
 
 # =============================
 # Main Script
 # =============================
 def main():
-    foldernames = [
-        f for f in os.listdir(main_directory)
-        if os.path.isdir(os.path.join(main_directory, f))
-    ]
-
+    foldernames = [f for f in os.listdir(main_directory)
+                   if os.path.isdir(os.path.join(main_directory, f))]
+   
     if not foldernames:
-        print(f"⚠ No sub-folders found in:\n{main_directory}")
+        print(f"⚠ No sub-folders found in main directory:\n{main_directory}")
         return
 
     for foldername in foldernames:
         folder_path = os.path.join(main_directory, foldername)
         print(f"\n🎧 Processing folder: {foldername}")
-        print(f"Using {EXECUTOR_NAME} for parallel processing")
+        results = []
 
-        wav_files = [
-            f for f in os.listdir(folder_path)
-            if f.lower().endswith(".wav")
-        ]
-
+        wav_files = [f for f in os.listdir(folder_path) if f.lower().endswith('.wav')]
         if not wav_files:
             print(f"⚠ No .wav files found in {folder_path}")
             continue
 
-        results = []
+        executor_type = "Threads" if use_threads else "Processes"
+        print(f"Using {executor_type} for parallel processing")
 
         with Executor() as executor:
-            futures = {
-                executor.submit(process_file, foldername, folder_path, f): f
-                for f in wav_files
-            }
+            futures = {executor.submit(process_file, foldername, folder_path, f): f for f in wav_files}
 
-            for future in tqdm(
-                as_completed(futures),
-                total=len(futures),
-                desc=f"Files in {foldername}"
-            ):
-                results.append(future.result())
+            for future in tqdm(as_completed(futures), total=len(futures), desc=f"Files in {foldername}"):
+                result = future.result()
+                if result:
+                    results.append(result)
 
-        # Build DataFrame (keep all rows)
-        df = pd.DataFrame(results)
+        if results:
+            df = pd.DataFrame(results)
 
-        # Ensure filename first
-        cols = ["filename"] + [c for c in df.columns if c != "filename"]
-        df = df[cols].sort_values("filename").reset_index(drop=True)
+            # Reorder columns
+            cols = ['filename'] + [c for c in df.columns if c != 'filename']
+            df = df[cols].sort_values(by='filename').reset_index(drop=True)
 
-        # Convert numeric columns where possible
-        df = df.apply(pd.to_numeric, errors="ignore")
+            # Ensure numeric columns
+            df = df.apply(pd.to_numeric, errors='ignore')
 
-        # Save CSV
-        output_csv = os.path.join(
-            folder_path,
-            f"{foldername}_100_48000_spectral_alpha_indices.csv"
-        )
-
-        df.to_csv(output_csv, index=False, encoding="utf-8-sig")
-        print(f"✔ Results saved at:\n{output_csv}")
+            # Save CSV
+            output_csv = os.path.join(folder_path, f"{foldername}_boatman_alpha_acoustic_indices_results.csv")
+            df.to_csv(output_csv, index=False, encoding='utf-8-sig')
+            print(f"✔ Results saved for folder '{foldername}' at:\n{output_csv}")
+        else:
+            print(f"⚠ No audio files processed successfully in folder '{foldername}'.")
 
 # =============================
-# Script Execution
+# Acoustic indices summary table
+# =============================
+def print_acoustic_indices_summary():
+    """
+    Print a summary table of the acoustic indices used,
+    their key parameters, and a brief description.
+    """
+    data = [
+        ["VARf", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Variance of the frequency bins in the spectrogram"],
+        ["KURTf", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Kurtosis of the frequency distribution of the spectrogram"],
+        ["NBPEAKS", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Number of spectral peaks in the frequency range"],
+        ["BGNf", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Background noise estimate of the frequency spectrum"],
+        ["EAS", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Acoustic entropy across frequency bins"],
+        ["ECV", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Coefficient of variation of the energy across frequency bins"],
+        ["EPS", f"threshold={temporal_threshold_db} dB", "Entropy of the temporal amplitude signal"],
+        ["EPS_KURT", f"threshold={temporal_threshold_db} dB", "Kurtosis of temporal entropy"],
+        ["ACI", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Acoustic Complexity Index, measuring amplitude variation across time and frequency"],
+        ["rBA", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Relative Bioacoustic Index, normalized energy in the frequency band"],
+        ["BI", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Bioacoustic Index, measures total energy in the band"],
+        ["ADI", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Acoustic Diversity Index, reflects the number of frequency bins with significant activity"],
+        ["EVNspMean", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Mean of the Event-based Normalized Spectrogram"],
+        ["TFSD", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Temporal Frequency Spectrum Density"],
+        ["RAOQ", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Rao's Quadratic Entropy, diversity index in frequency domain"],
+        ["AGI", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Acoustic Grouping Index, measures clustering of acoustic events"],
+        ["aROI", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Acoustic Region of Interest index, energy in a specific band"],
+        ["MEANt", f"threshold={temporal_threshold_db} dB", "Mean amplitude of temporal signal above threshold"],
+        ["SKEWt", f"threshold={temporal_threshold_db} dB", "Skewness of temporal amplitude distribution"],
+        ["KURTt", f"threshold={temporal_threshold_db} dB", "Kurtosis of temporal amplitude distribution"],
+        ["Ht", f"threshold={temporal_threshold_db} dB", "Shannon entropy of the temporal signal"],
+        ["EVNtMean", f"threshold={temporal_threshold_db} dB", "Mean of temporal event-based normalized signal"],
+        ["EVNtCount", f"threshold={temporal_threshold_db} dB", "Count of temporal events above threshold"]
+    ]
+
+    df_summary = pd.DataFrame(data, columns=["Index", "Parameters", "Description"])
+    print("\n🎶 Acoustic Indices Summary Table")
+    print(df_summary.to_string(index=False))
+
+    # Optional: save summary table to CSV in main directory
+    try:
+        summary_csv = os.path.join(main_directory, "boatman_acoustic_indices_summary.csv")
+        df_summary.to_csv(summary_csv, index=False, encoding='utf-8-sig')
+        print(f"\n✔ Acoustic indices summary saved as CSV at:\n{summary_csv}")
+    except Exception as e:
+        print(f"\n⚠ Could not save summary CSV to main directory: {e}")
+
+
+# =============================
+# SCRIPT EXECUTION
 # =============================
 if __name__ == "__main__":
     main()
-
+    print_acoustic_indices_summary()
 ```
 
 ## Analysis of acoustic indices data (R Studio) 
