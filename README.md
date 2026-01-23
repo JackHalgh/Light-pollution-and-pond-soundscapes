@@ -208,187 +208,264 @@ if __name__ == "__main__":
 ## Analysis of acoustic indices data (R Studio) 
 
 ```
-# ============================
-# 1. Load required packages
-# ============================
+# =====================================================
+# 1. SETUP & LIBRARIES
+# =====================================================
 library(dplyr)
 library(stringr)
-library(ggplot2)
-library(lme4)
-library(lmerTest)
-library(emmeans)
-library(corrr)
-library(caret)
+library(lubridate)
+library(tidyr)
 library(purrr)
+library(broom)
+library(nlme)
+library(car)
+library(ggplot2)
 
-# ============================
-# 2. Read and combine CSV files
-# ============================
-dir_path <- "D:/Light pollution/2.5 kHz - 4.0 kHz niche space"
+# Set your directory
+dir_path <- "C:/Users/Administrador/OneDrive - McGill University/Light pollution and pond soundscapes/Jan 2026"
 
-csv_files <- list.files(path = dir_path, pattern = "\\.csv$", full.names = TRUE)
-data_list <- lapply(csv_files, read.csv, stringsAsFactors = FALSE)
-names(data_list) <- tools::file_path_sans_ext(basename(csv_files))
+# =====================================================
+# 2. DATA LOADING & FILENAME EXTRACTION
+# =====================================================
+txt_files <- list.files(path = dir_path, pattern = "(?i)\\.txt$", 
+                        full.names = TRUE, recursive = TRUE)
 
-combined_df <- bind_rows(data_list, .id = "source_file")
+if(length(txt_files) == 0) stop("No .txt files found in the directory!")
 
-# ============================
-# 3. Clean and format metadata
-# ============================
-combined_df <- combined_df %>%
+merged_df <- do.call(rbind, lapply(txt_files, function(f) {
+  tryCatch({
+    tmp <- read.table(f, header = TRUE, sep = ",", stringsAsFactors = FALSE)
+    file_base <- basename(f)
+    # Captures "2.0 - 4.0" from the filename
+    tmp$Bandwidth <- str_extract(file_base, "(?<=Summary_).*(?=\\.txt)")
+    return(tmp)
+  }, error = function(e) return(NULL))
+}))
+
+# Clean and extract metadata
+merged_df <- merged_df %>%
   mutate(
-    Treatment = str_trim(Treatment),
-    Treatment = factor(Treatment, levels = c("Phase I", "Phase II", "Phase III")),
-    Site = factor(Site),
-    Sampling.date = factor(Sampling.date)
+    Site = case_when(
+      str_detect(filename, "EF")    ~ "EF",
+      str_detect(filename, "FWF|FF") ~ "FF",
+      str_detect(filename, "OSP")   ~ "OSP",
+      str_detect(filename, "UoBBG") ~ "UoBBG",
+      TRUE                          ~ NA_character_
+    ),
+    raw_ts = str_extract(filename, "\\d{8}_\\d{6}"),
+    Datetime = as.POSIXct(raw_ts, format = "%Y%m%d_%H%M%S", tz = "Europe/London"),
+    Exp_Date = as.Date(Datetime - hours(4)) 
+  ) %>% 
+  filter(!is.na(Site), !is.na(Datetime))
+
+# =====================================================
+# 3. PHASE LOOKUP (Experimental Timing Logic)
+# =====================================================
+all_exp_dates <- unique(merged_df$Exp_Date)
+
+phase_lookup <- expand.grid(Site = c("EF", "FF", "OSP", "UoBBG"), 
+                            Exp_Date = all_exp_dates, 
+                            stringsAsFactors = FALSE) %>%
+  group_by(Site, Exp_Date) %>%
+  reframe({
+    if (Site == "OSP" && Exp_Date == as.Date("2025-08-25")) {
+      data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
+                 S = c("21:11", "22:11", "23:11"), E = c("22:10", "23:10", "00:10"))
+    } else if (Site == "OSP" && Exp_Date == as.Date("2025-08-27")) {
+      data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
+                 S = c("21:07", "22:07", "23:07"), E = c("22:06", "23:06", "00:06"))
+    } else if (Site == "OSP") {
+      data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
+                 S = c("21:08", "22:08", "23:08"), E = c("22:07", "23:07", "00:07"))
+    } else if (Site == "UoBBG") {
+      data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
+                 S = c("21:04", "22:04", "23:04"), E = c("22:03", "23:03", "00:03"))
+    } else if (Site == "FF") {
+      data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
+                 S = c("20:49", "21:49", "22:49"), E = c("21:48", "22:48", "23:48"))
+    } else { 
+      data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
+                 S = c("20:51", "21:51", "22:51"), E = c("21:50", "22:50", "23:50"))
+    }
+  }) %>%
+  mutate(
+    P_Start = as.POSIXct(paste(Exp_Date, S), tz = "Europe/London"),
+    P_End   = as.POSIXct(paste(Exp_Date, E), tz = "Europe/London"),
+    P_End   = if_else(P_End <= P_Start, P_End + days(1), P_End)
   )
 
-# ============================
-# 4. Remove highly correlated indices (>0.8)
-# ============================
-numeric_vars <- combined_df %>% select(where(is.numeric))
-cor_matrix <- cor(numeric_vars, use = "pairwise.complete.obs")
+# Filter data to include only the defined experimental windows
+final_df <- merged_df %>%
+  left_join(phase_lookup, by = c("Site", "Exp_Date"), relationship = "many-to-many") %>%
+  filter(Datetime >= P_Start & Datetime <= P_End)
 
-high_cor <- findCorrelation(cor_matrix, cutoff = 0.8, verbose = TRUE, names = TRUE)
-acoustic_df <- numeric_vars %>% select(-all_of(high_cor))
+# =====================================================
+# 4. INITIAL PCA & OUTLIER DETECTION
+# =====================================================
+pca_vars <- c("NDSI", "Bio_Energy", "Anthro_Energy", "RMS_Mean", "ZCR_Mean", "MFCC_4", "MFCC_7", "MFCC_8")
+pca_init <- prcomp(final_df[, pca_vars], center = TRUE, scale. = TRUE)
 
-combined_clean <- bind_cols(
-  combined_df %>% select(source_file, filename, Site, Sampling.date, Treatment),
-  acoustic_df
+df_init <- bind_cols(final_df, as.data.frame(pca_init$x)) %>%
+  mutate(Treatment = factor(Treatment, levels = c("Phase I", "Phase II", "Phase III")))
+
+# Run initial model to identify extreme anomalies
+model_init <- lme(PC1 ~ Treatment, random = ~ 1 | Site,
+                  correlation = corAR1(form = ~ 1 | Site/Exp_Date),
+                  weights = varIdent(form = ~ 1 | Site),
+                  data = df_init, control = lmeControl(opt = "optim"))
+
+df_init$norm_res <- residuals(model_init, type = "normalized")
+
+# Identify files where residual > 3 standard deviations
+outlier_list <- df_init %>% filter(abs(norm_res) > 3) %>% pull(filename)
+df_cleaned <- df_init %>% filter(!filename %in% outlier_list)
+
+message(paste("Removed", length(outlier_list), "outliers. Proceeding with Final Model..."))
+
+# =====================================================
+# 5. FINAL PCA & MODEL (On Cleaned Data)
+# =====================================================
+# Rerunning PCA ensures the acoustic axes aren't skewed by the outliers
+pca_final <- prcomp(df_cleaned[, pca_vars], center = TRUE, scale. = TRUE)
+
+df_final <- bind_cols(
+  df_cleaned %>% select(Datetime, filename, Bandwidth, Site, Exp_Date, Treatment),
+  as.data.frame(pca_final$x)
+) %>% mutate(Treatment = factor(Treatment, levels = c("Phase I", "Phase II", "Phase III")))
+
+# The "Gold Standard" Model: Accounts for Site variation, Time, and Heteroscedasticity
+final_model <- lme(
+  PC1 ~ Treatment, 
+  random = ~ 1 | Site,
+  correlation = corAR1(form = ~ 1 | Site/Exp_Date),
+  weights = varIdent(form = ~ 1 | Site), 
+  data = df_final,
+  control = lmeControl(opt = "optim")
 )
 
-# ============================
-# 5. Z-standardize acoustic indices
-# ============================
-combined_clean <- combined_clean %>%
-  mutate(across(where(is.numeric), ~ scale(.)[, 1]))
+# =====================================================
+# 6. RESULTS & DIAGNOSTICS
+# =====================================================
+# 1. Statistical Summary
+print(summary(final_model))
 
-# ============================
-# 6. Fit linear mixed-effects models
-# ============================
-acoustic_indices <- colnames(acoustic_df)
-results_list <- list()
+# 2. Final Assumption Checks
+df_final$final_res <- residuals(final_model, type = "normalized")
+par(mfrow = c(1, 2))
+qqnorm(df_final$final_res, main = "Final Q-Q Plot")
+qqline(df_final$final_res, col = "red")
+plot(final_model, resid(., type = "normalized") ~ fitted(.), main = "Final Residuals vs Fitted")
+par(mfrow = c(1, 1))
 
-for (idx in acoustic_indices) {
-  formula <- as.formula(paste(idx, "~ Treatment * Site + (1 | Sampling.date)"))
-  mod <- lmer(formula, data = combined_clean)
-  results_list[[idx]] <- list(model = mod)
-}
+# =====================================================
+# 7. FINAL VISUALIZATION WITH SIGNIFICANCE STARS
+# =====================================================
 
-# ============================
-# 7. Extract effect sizes (BASELINE = Phase I)
-# ============================
-get_all_contrasts <- function(idx) {
-  mod <- results_list[[idx]]$model
-  emm <- emmeans(mod, ~ Treatment | Site)
-  
-  # Weights: Phase I, Phase II, Phase III
-  # Baseline is Phase I (-1). 
-  # Contrast 1: Phase II minus Phase I
-  # Contrast 2: Phase III minus Phase I
-  contr <- contrast(
-    emm,
-    method = list(
-      "Impact (Light vs Natural Dark)"   = c(-1,  1,  0), 
-      "Legacy (Recovery vs Natural Dark)" = c(-1,  0,  1)
-    ),
-    by = "Site",
-    infer = c(TRUE, TRUE)
+# 1. Calculate Site-specific p-values for Phase II
+site_stats <- df_final %>%
+  group_by(Site) %>%
+  do(tidy(lm(PC1 ~ Treatment, data = .))) %>%
+  filter(term == "TreatmentPhase II") %>%
+  mutate(label = case_when(
+    p.value < 0.001 ~ "***",
+    p.value < 0.01  ~ "**",
+    p.value < 0.05  ~ "*",
+    TRUE            ~ ""
+  ))
+
+# 2. Prepare plot data
+plot_data_clean <- df_final %>%
+  group_by(Site) %>%
+  mutate(baseline = mean(PC1[Treatment == "Phase I"], na.rm = TRUE),
+         PC1_Rel = PC1 - baseline) %>%
+  group_by(Site, Treatment) %>%
+  summarise(est = mean(PC1_Rel), se = sd(PC1_Rel)/sqrt(n()), .groups = 'drop')
+
+# 3. Merge stats with plot data to position stars
+stars_data <- plot_data_clean %>%
+  filter(Treatment == "Phase II") %>%
+  left_join(site_stats %>% select(Site, label), by = "Site") %>%
+  mutate(y_pos = est + (1.96 * se) + 0.2) # Position star slightly above error bar
+
+# 4. Generate the Plot
+final_plot <- ggplot(plot_data_clean, aes(x = Treatment, y = est, group = Site)) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+  geom_line(color = "grey70", linewidth = 1) + 
+  geom_errorbar(aes(ymin = est - 1.96*se, ymax = est + 1.96*se, color = Treatment), 
+                width = 0.15, linewidth = 0.8) +
+  geom_point(aes(color = Treatment), size = 3.5) +
+  # Add the stars here
+  geom_text(data = stars_data, aes(x = Treatment, y = y_pos, label = label), 
+            vjust = 0, size = 6, fontface = "bold", color = "black") +
+  facet_wrap(~Site) +
+  scale_color_manual(values = c("Phase I" = "black", "Phase II" = "#E69F00", "Phase III" = "grey50")) +
+  theme_bw() +
+  labs(
+    x = "Experimental phase",
+    y = "Change in PC1 (Relative to natural darkness)"
+  ) +
+  theme(
+    legend.position = "none",
+    strip.background = element_rect(fill = "grey95"),
+    panel.grid.minor = element_blank()
   )
-  
-  as.data.frame(contr) %>%
-    mutate(Index = idx)
-}
 
-all_sites_effect_df <- map_dfr(acoustic_indices, get_all_contrasts)
+print(final_plot)
 
-# ============================
-# 8. Categorize & Factor Formatting
-# ============================
-all_sites_effect_df <- all_sites_effect_df %>%
-  mutate(
-    Category = case_when(
-      Index %in% c("ADI", "BI", "BioEnergy", "NDSI", "NBPEAKS", "rBA", "H_Havrda", "H_Renyi") ~ "Biophony & diversity",
-      Index %in% c("EAS", "ECU", "EPS_KURT", "KURTf") ~ "Complexity & entropy",
-      Index %in% c("AnthroEnergy", "LFC", "EVNspMean", "BGNf", "TFSD") ~ "Anthrophony & noise",
-      TRUE ~ "Other"
-    ),
-    # Lock the order of the baseline comparisons
-    contrast = factor(contrast, levels = c("Impact (Light vs Natural Dark)", "Legacy (Recovery vs Natural Dark)")),
-    sig = ifelse(p.value < 0.05, "*", "")
-  )
+# =====================================================
+# 8. EXPORT FOR PUBLICATION (300 DPI PDF)
+# =====================================================
+ggsave(
+  filename = file.path(dir_path, "Pond_Acoustic_Final_Stars.pdf"),
+  plot = final_plot,
+  device = "pdf",
+  width = 6, 
+  height = 7, 
+  units = "in",
+  dpi = 300
+)
 
-# ============================
-# 9. Loop through Sites, Plot, and Export
-# ============================
-# Visual settings
-contrast_colors <- c("Impact (Light vs Natural Dark)" = "#FFC300", "Legacy (Recovery vs Natural Dark)" = "gray60")
-contrast_lines  <- c("Impact (Light vs Natural Dark)" = "solid",  "Legacy (Recovery vs Natural Dark)" = "dashed")
-unique_sites    <- unique(all_sites_effect_df$Site)
+# =====================================================
+# 9. PCA INTERPRETATION (LOADINGS)
+# =====================================================
 
-for (current_site in unique_sites) {
-  
-  # 1. Filter and re-order data
-  site_data <- all_sites_effect_df %>% filter(Site == current_site)
-  site_index_order <- site_data %>%
-    group_by(Index) %>%
-    summarize(mean_est = mean(estimate)) %>%
-    arrange(mean_est) %>%
-    pull(Index)
-  
-  site_data$Index <- factor(site_data$Index, levels = site_index_order)
-  
-  # 2. Build Plot
-  p <- ggplot(site_data, aes(x = estimate, y = Index, color = contrast, linetype = contrast)) +
-    # Phase I baseline reference (0 line)
-    geom_vline(xintercept = 0, linetype = "dotted", color = "black", linewidth = 0.6) +
-    
-    geom_errorbarh(
-      aes(xmin = lower.CL, xmax = upper.CL),
-      height = 0.5, linewidth = 1.1,
-      position = position_dodge(width = 0.7)
-    ) +
-    
-    geom_point(size = 3.5, position = position_dodge(width = 0.7)) +
-    
-    geom_text(
-      aes(label = sig, x = upper.CL + 0.1), 
-      position = position_dodge(width = 0.7),
-      color = "#FFC300", size = 8, vjust = 0.7, show.legend = FALSE
-    ) +
-    
-    facet_grid(Category ~ ., scales = "free_y", space = "free_y") +
-    
-    scale_color_manual(values = contrast_colors) + 
-    scale_linetype_manual(values = contrast_lines) +
-    
-    theme_bw(base_size = 14) +
-    theme(
-      panel.grid.minor = element_blank(),
-      strip.background = element_rect(fill = "gray95"),
-      strip.text = element_text(face = "bold"),
-      legend.position = "bottom",
-      legend.title = element_blank()
-    ) +
-    labs(
-      title = paste("Site:", current_site, "(Baseline = Phase I)"),
-      x = "Standardized effect size (Relative to natural darkness)",
-      y = "Acoustic index"
-    )
-  
-  # 3. Export
-  full_save_path <- file.path(dir_path, paste0(current_site, "_Phase1Baseline_Plot.jpg"))
-  
-  ggsave(
-    filename = full_save_path,
-    plot = p,
-    device = "jpeg",
-    dpi = 300,
-    width = 10,
-    height = 12,
-    units = "in"
-  )
-}
+# Extract the loadings (rotation) for the first few PCs
+loadings <- as.data.frame(pca_final$rotation[, 1:2]) # Looking at PC1 and PC2
+loadings$Index <- rownames(loadings)
+
+# Rename columns for clarity
+colnames(loadings) <- c("PC1_Loading", "PC2_Loading", "Index")
+
+# Sort by PC1 to see the strongest drivers
+loadings <- loadings %>%
+  select(Index, PC1_Loading, PC2_Loading) %>%
+  arrange(desc(abs(PC1_Loading)))
+
+print("PCA Loadings (Drivers of PC1):")
+print(loadings)
+
+# Export the loadings table to CSV for your supplementary materials
+write.csv(loadings, file.path(dir_path, "PCA_Loadings_Table.csv"), row.names = FALSE)
+
+# =====================================================
+# 10. PCA BIPLOT
+# =====================================================
+library(ggfortify)
+
+biplot_pc1_pc2 <- autoplot(pca_final, data = df_final, colour = 'Treatment',
+                           loadings = TRUE, loadings.colour = 'black',
+                           loadings.label = TRUE, loadings.label.size = 4,
+                           loadings.label.colour = 'black',
+                           alpha = 0.3) +
+  scale_color_manual(values = c("Phase I" = "black", "Phase II" = "#E69F00", "Phase III" = "grey60")) +
+  theme_bw() +
+  labs(title = "",
+       subtitle = "")
+
+print(biplot_pc1_pc2)
+
+# Save biplot
+ggsave(file.path(dir_path, "PCA_Biplot.pdf"), plot = biplot_pc1_pc2, width = 8, height = 6, dpi = 300)
 ```
 
 ### Light treatment vs pre-light treatment (1 kHz - 10 kHz) as shown by key acoustic indices
