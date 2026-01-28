@@ -1,211 +1,534 @@
 # Light-pollution-and-pond-soundscapes
 
-## Calculation of acoustic indices (Python)
+## Power spectral density analysis
+```
+import os
+import shutil
+import datetime
+import re
+
+# ================= CONFIGURATION =================
+
+# 1. ENTER YOUR PATHS HERE
+SOURCE_DIRECTORY = r"D:\Light pollution\Python"
+OUTPUT_DIRECTORY = r"D:\Light pollution\Sorted folders"
+
+# 2. DEFINING THE PHASES
+# I have corrected the "End Times" based on your confirmation 
+# that every phase is exactly 1 hour long.
+
+FOLDER_CONFIG = {
+    "OSP_2_25.08.2025": {
+        "base_date_str": "2025-08-25",
+        "phases": [
+            {"name": "Phase_I",   "start": "21:11", "end": "22:10"},
+            {"name": "Phase_II",  "start": "22:11", "end": "23:10"},
+            {"name": "Phase_III", "start": "23:11", "end": "00:10"} 
+        ]
+    },
+    "OSP_3_27.08.2025": {
+        "base_date_str": "2025-08-27",
+        "phases": [
+            {"name": "Phase_I",   "start": "21:07", "end": "22:06"},
+            {"name": "Phase_II",  "start": "22:07", "end": "23:06"},
+            {"name": "Phase_III", "start": "23:07", "end": "00:06"}
+        ]
+    },
+    "OSP_1_26_08_24": {
+        "base_date_str": "2024-08-26",
+        "phases": [
+            {"name": "Phase_I",   "start": "21:08", "end": "22:07"},
+            {"name": "Phase_II",  "start": "22:08", "end": "23:07"},
+            {"name": "Phase_III", "start": "23:08", "end": "00:07"}
+        ]
+    },
+    "UoBBG_29.08.2024": {
+        "base_date_str": "2024-08-28", 
+        "phases": [
+            {"name": "Phase_I",   "start": "21:04", "end": "22:03"},
+            {"name": "Phase_II",  "start": "22:04", "end": "23:03"},
+            {"name": "Phase_III", "start": "23:04", "end": "00:03"}
+        ]
+    },
+    "FF_04.09.2024": {
+        "base_date_str": "2024-09-04", 
+        "phases": [
+            {"name": "Phase_I",   "start": "20:49", "end": "21:48"},
+            {"name": "Phase_II",  "start": "21:49", "end": "22:48"},
+            {"name": "Phase_III", "start": "22:49", "end": "23:48"}
+        ]
+    },
+    "EF_03.09.2024": {
+        "base_date_str": "2024-09-03",
+        "phases": [
+            {"name": "Phase_I",   "start": "20:51", "end": "21:50"},
+            {"name": "Phase_II",  "start": "21:51", "end": "22:50"},
+            {"name": "Phase_III", "start": "22:51", "end": "23:50"}
+        ]
+    }
+}
+
+# ================= LOGIC =================
+
+def get_datetime_from_filename(filename):
+    """
+    Extracts datetime from filename string like '20240903_231700'.
+    Returns a datetime object or None if format not found.
+    """
+    # Regex looks for 8 digits (date) followed by _ followed by 6 digits (time)
+    match = re.search(r"(\d{8})_(\d{6})", filename)
+    if match:
+        date_part = match.group(1)
+        time_part = match.group(2)
+        try:
+            return datetime.datetime.strptime(f"{date_part}_{time_part}", "%Y%m%d_%H%M%S")
+        except ValueError:
+            return None
+    return None
+
+def process_audio_files():
+    print("Starting processing using FILENAMES...")
+    
+    for folder_name, config in FOLDER_CONFIG.items():
+        folder_path = os.path.join(SOURCE_DIRECTORY, folder_name)
+        
+        if not os.path.exists(folder_path):
+            print(f"Skipping: {folder_name} (Folder not found)")
+            continue
+
+        print(f"Processing Folder: {folder_name}")
+        
+        # Base date for this experiment folder
+        base_date = datetime.datetime.strptime(config['base_date_str'], "%Y-%m-%d")
+        
+        # 1. Collect all valid wav files and parse their times
+        valid_files = []
+        for f in os.listdir(folder_path):
+            if f.lower().endswith('.wav'):
+                file_dt = get_datetime_from_filename(f)
+                if file_dt:
+                    full_path = os.path.join(folder_path, f)
+                    valid_files.append((full_path, file_dt, f))
+                else:
+                    print(f"  [Warning] Could not parse date from filename: {f}")
+        
+        # Sort files by their actual timestamp
+        valid_files.sort(key=lambda x: x[1])
+
+        # 2. Iterate through phases
+        for phase in config['phases']:
+            # Create Time Objects
+            t_start = datetime.datetime.strptime(phase['start'], "%H:%M").time()
+            t_end = datetime.datetime.strptime(phase['end'], "%H:%M").time()
+            
+            # Combine with Date to make full Datetime objects
+            # Start time is always on the base date
+            dt_start = datetime.datetime.combine(base_date, t_start)
+            
+            # End time: if end time is smaller than start time (e.g. 23:00 to 00:00), 
+            # it implies it rolled over to the next day.
+            dt_end = datetime.datetime.combine(base_date, t_end)
+            if t_end < t_start:
+                dt_end += datetime.timedelta(days=1)
+            
+            # 3. Find files that match this window
+            phase_files = []
+            for f_path, f_dt, f_name in valid_files:
+                if dt_start <= f_dt <= dt_end:
+                    phase_files.append((f_path, f_name))
+            
+            # 4. Copy files (Limit to 60 if needed, usually safer to take all in window)
+            # You requested 60 files chunks, so we slice [:60]
+            files_to_copy = phase_files[:60]
+            
+            print(f"  > {phase['name']} ({dt_start} - {dt_end})")
+            print(f"    Found {len(phase_files)} files. Copying {len(files_to_copy)}...")
+
+            if files_to_copy:
+                dest_dir = os.path.join(OUTPUT_DIRECTORY, folder_name, phase['name'])
+                os.makedirs(dest_dir, exist_ok=True)
+                
+                for src, fname in files_to_copy:
+                    dst = os.path.join(dest_dir, fname)
+                    shutil.copy2(src, dst)
+            else:
+                print(f"    No files found for this phase.")
+
+    print("\nProcessing complete.")
+
+if __name__ == "__main__":
+    process_audio_files()
+
+import os
+import numpy as np
+from scipy.io import wavfile
+from scipy.signal import welch
+
+# ================= CONFIGURATION =================
+# Point this to your main "Sorted folders" directory
+ROOT_DIRECTORY = r"D:\Light pollution\Sorted folders"
+
+# FFT Parameters for 93.75Hz resolution at 96kHz
+FS = 96000 
+NPERSEG = 1024 
+
+def run_spectral_analysis():
+    print(f"Starting Analysis (Sample Rate: {FS}Hz)...")
+
+    # Walk through the directory structure
+    for root, dirs, files in os.walk(ROOT_DIRECTORY):
+        # Filter for wav files
+        wav_files = [f for f in files if f.lower().endswith('.wav')]
+        
+        if not wav_files:
+            continue
+
+        # Identifying folder and phase names for the output file
+        # Assumes structure: ...\Sorted folders\Experiment_Folder\Phase_X
+        path_parts = root.split(os.sep)
+        phase_name = path_parts[-1]
+        experiment_name = path_parts[-2]
+        
+        print(f"Processing: {experiment_name} -> {phase_name}")
+
+        all_psds = []
+
+        for wav_name in wav_files:
+            file_path = os.path.join(root, wav_name)
+            try:
+                sample_rate, data = wavfile.read(file_path)
+                
+                # Check if sample rate matches
+                if sample_rate != FS:
+                    # Optional: print warning if a file differs from 96kHz
+                    pass
+
+                # Handle Stereo (use left channel)
+                if len(data.shape) > 1:
+                    data = data[:, 0]
+
+                # Convert to float and normalize to -1.0 to 1.0
+                # This ensures dB levels are relative to Digital Full Scale (dBFS)
+                data = data.astype(float) / 32768.0 if data.dtype == np.int16 else data.astype(float)
+
+                # Calculate Power Spectral Density (PSD)
+                # nperseg=1024 creates the 93.75Hz bins
+                freqs, psd = welch(data, fs=FS, nperseg=NPERSEG, scaling='spectrum')
+                all_psds.append(psd)
+
+            except Exception as e:
+                print(f"  [Error] Could not read {wav_name}: {e}")
+
+        if all_psds:
+            # Average all minutes in the phase
+            avg_psd = np.mean(all_psds, axis=0)
+            
+            # Convert power to dB Level
+            # Formula: 10 * log10(Power) is equivalent to 20 * log10(Amplitude)
+            levels_db = 10 * np.log10(avg_psd + 1e-12)
+
+            # Generate Output Filename
+            out_name = f"spectrum_{experiment_name}_{phase_name}.txt"
+            output_path = os.path.join(root, out_name)
+
+            # Save in the requested Tab-Separated format
+            with open(output_path, 'w') as f:
+                f.write("Frequency (Hz)\tLevel (dB)\n")
+                # We start from index 1 to skip the 0Hz (DC) component
+                for i in range(1, len(freqs)):
+                    f.write(f"{freqs[i]:.6f}\t{levels_db[i]:.6f}\n")
+            
+            print(f"  Saved: {out_name}")
+
+    print("\nProcessing complete. Check your phase folders for the .txt files.")
+
+if __name__ == "__main__":
+    run_spectral_analysis()
+```
+
+## Acoustic feature extraction and signal processing
 
 ```
 #By Jack A. Greenhalgh, June, 2025.
 #Department of Biology, McGill University, 1205 Dr Penfield Ave, Montreal, Quebec, H3A 1B1, Canada.
-# =============================================
-# Acoustic Indices Batch Processing Script
-# Robust for Spyder and Command Line
-# Supports optional spectrogram cropping AND index frequency parameters
-# Prints summary of acoustic indices at the end
-# =============================================
-
 import os
+import numpy as np
 import pandas as pd
-from maad import sound
-import maad.features.alpha_indices as ai
+import librosa
+import gc
+from scipy.signal import find_peaks, butter, lfilter
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor as Executor, as_completed
 
-# =============================
-# Detect environment and choose executor
-# =============================
-def in_spyder():
-    """Detect if running inside Spyder"""
-    return 'SPYDER_ARGS' in os.environ or 'SPYDER_PID' in os.environ
+# ==============================================================================
+# 1. USER CONFIGURATION (CHANGE THESE ONLY)
+# ==============================================================================
+# Define the frequency range you want to analyze (in Hz)
+F_MIN = 40000    # Lower limit of the bandpass filter
+F_MAX = 47000   # Upper limit of the bandpass filter
 
-if in_spyder():
-    from concurrent.futures import ThreadPoolExecutor as Executor
-    use_threads = True
-else:
-    from concurrent.futures import ProcessPoolExecutor as Executor
-    use_threads = False
+# Define the "split point" between Human noise (Anthro) and Nature (Bio)
+NDSI_SPLIT = 42800 
 
-from concurrent.futures import as_completed
-
-# =============================
-# Configurable Parameters
-# =============================
-NFFT = 1024
-noverlap = 512
-window = 'hann'
-temporal_threshold_db = -85
-
-# Frequency range for spectral indices
-# These parameters are passed directly to the spectral index functions
-spectral_fmin = 2000
-spectral_fmax = 4000
-
-# Frequency range for optional spectrogram subset
-# Only used if subset_spectrogram = True
-spectrogram_fmin = 2000
-spectrogram_fmax = 4000
-
-# Option to manually subset spectrogram before index calculation
-subset_spectrogram = True  # Set True to crop Sxx manually
-
-# Main directory
+# Directory settings
 main_directory = r"D:\Light pollution\Python"
 
+# ==============================================================================
+# 2. AUTOMATIC CALCULATION
+# ==============================================================================
+# Automatically set Sampling Rate (SR) to 2.5x the max frequency
+TARGET_SR = int(F_MAX * 2.5)
+
+print(f"--- AUTO-CONFIGURATION ---")
+print(f"Analysis Band: {F_MIN} Hz to {F_MAX} Hz")
+print(f"NDSI Split:    Anthro ({F_MIN}-{NDSI_SPLIT} Hz) | Bio ({NDSI_SPLIT}-{F_MAX} Hz)")
+print(f"Processing SR: {TARGET_SR} Hz (Automatically calculated)")
+print("-" * 26)
+
+# Map variables to the processing logic
+low_cut = float(F_MIN)
+high_cut = float(F_MAX)
+anthro_min, anthro_max = F_MIN, NDSI_SPLIT
+bio_min, bio_max = NDSI_SPLIT, F_MAX
+
+# Standard fixed parameters
+peak_height_db = -80  
+min_peak_dist = int(TARGET_SR / 10) # Dynamic: roughly 0.1 seconds
+n_mfcc = 13  
+n_fft = 1024 
+hop_length = 256
+
 # =============================
-# File Processing Function
+# Signal Processing Functions
 # =============================
+def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
+    nyq = 0.5 * fs
+    low = lowcut / nyq
+    high = highcut / nyq
+    # Safety check: if high band is too close to Nyquist, cap it at 99%
+    if high >= 0.99: 
+        high = 0.99 
+    b, a = butter(order, [low, high], btype='band')
+    return lfilter(b, a, data)
+
+def calculate_ndsi(S, frequencies, anthro_range, bio_range):
+    # Mask: Select rows in the spectrogram corresponding to the frequency ranges
+    anthro_mask = (frequencies >= anthro_range[0]) & (frequencies <= anthro_range[1])
+    bio_mask = (frequencies >= bio_range[0]) & (frequencies <= bio_range[1])
+    
+    anthro_energy = np.sum(S[anthro_mask, :])
+    bio_energy = np.sum(S[bio_mask, :])
+    
+    total_energy = anthro_energy + bio_energy
+    
+    if total_energy > 0:
+        ndsi = (bio_energy - anthro_energy) / total_energy
+    else:
+        ndsi = 0
+        
+    return ndsi, bio_energy, anthro_energy
+
 def process_file(foldername, folder_path, filename):
-    """Compute spectral and temporal alpha indices for a single .wav file"""
     filepath = os.path.join(folder_path, filename)
+    features = {'filename': f"{foldername}_{filename}"}
+
     try:
-        s, fs = sound.load(filepath)
-        if s is None or len(s) == 0:
-            raise ValueError("Empty or invalid audio file")
+        # 1. Load & Downsample using the AUTO-CALCULATED SR
+        y, sr = librosa.load(filepath, sr=TARGET_SR)
+        
+        if len(y) == 0: return None
 
-        # Compute full spectrogram
-        Sxx_power, tn, fn, _ = sound.spectrogram(
-            s, fs, window=window, nperseg=NFFT, noverlap=noverlap
-        )
+        # 2. Apply Bandpass Filter
+        y_filtered = butter_bandpass_filter(y, low_cut, high_cut, sr)
 
-        # Optional manual cropping of spectrogram
-        if subset_spectrogram:
-            freq_mask = (fn >= spectrogram_fmin) & (fn <= spectrogram_fmax)
-            if freq_mask.sum() == 0:
-                raise ValueError(f"No frequencies found in range {spectrogram_fmin}-{spectrogram_fmax} Hz")
-            Sxx_power = Sxx_power[freq_mask, :]
-            fn = fn[freq_mask]
+        # 3. Frequency Domain Analysis
+        S_mag = np.abs(librosa.stft(y_filtered, n_fft=n_fft, hop_length=hop_length))
+        freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
 
-        # Compute spectral indices using spectral_fmin/spectral_fmax as function parameters
-        spectral = ai.all_spectral_alpha_indices(
-            Sxx_power, tn, fn, fmin=spectral_fmin, fmax=spectral_fmax
-        )
-        spectral_dict = spectral[0].iloc[0].to_dict()
+        # Features
+        features['Spectral_Centroid_Mean'] = np.mean(librosa.feature.spectral_centroid(S=S_mag, sr=sr))
+        features['Spectral_Flatness_Mean'] = np.mean(librosa.feature.spectral_flatness(S=S_mag))
+        
+        # NDSI using auto-ranges
+        ndsi, bio_en, anthro_en = calculate_ndsi(S_mag, freqs, (anthro_min, anthro_max), (bio_min, bio_max))
+        features['NDSI'] = ndsi
+        features['Bio_Energy'] = bio_en
+        features['Anthro_Energy'] = anthro_en
 
-        # Compute temporal indices
-        temporal = ai.all_temporal_alpha_indices(s, fs, threshold=temporal_threshold_db)
-        temporal_dict = temporal.iloc[0].to_dict()
+        # 4. Temporal Analysis
+        features['ZCR_Mean'] = np.mean(librosa.feature.zero_crossing_rate(y_filtered))
+        features['RMS_Mean'] = np.mean(librosa.feature.rms(y=y_filtered))
+        
+        # Event Detection
+        peaks, _ = find_peaks(np.abs(y_filtered), height=librosa.db_to_amplitude(peak_height_db), distance=min_peak_dist)
+        features['Event_Count'] = len(peaks)
 
-        # Combine results
-        combined = {**spectral_dict, **temporal_dict}
-        combined['filename'] = f"{foldername}_{filename}"
-        return combined
+        # 5. MFCCs
+        mfccs = librosa.feature.mfcc(S=librosa.amplitude_to_db(S_mag + 1e-10), sr=sr, n_mfcc=n_mfcc)
+        for i, coeff in enumerate(np.mean(mfccs, axis=1)):
+            features[f'MFCC_{i+1}'] = coeff
+
+        # Cleanup
+        del y, y_filtered, S_mag, freqs
+        gc.collect() 
+        return features
 
     except Exception as e:
-        print(f"⚠ Error processing {filename} in {foldername}: {e}")
+        print(f"⚠ Error in {filename}: {e}")
         return None
 
 # =============================
-# Main Script
+# Main Execution Logic
 # =============================
 def main():
-    foldernames = [f for f in os.listdir(main_directory)
-                   if os.path.isdir(os.path.join(main_directory, f))]
-   
-    if not foldernames:
-        print(f"⚠ No sub-folders found in main directory:\n{main_directory}")
-        return
-
+    foldernames = [f for f in os.listdir(main_directory) if os.path.isdir(os.path.join(main_directory, f))]
+    
     for foldername in foldernames:
         folder_path = os.path.join(main_directory, foldername)
-        print(f"\n🎧 Processing folder: {foldername}")
+        wav_files = [f for f in os.listdir(folder_path) if f.lower().endswith('.wav')]
+        if not wav_files: continue
+
+        print(f"\n🚀 Analyzing {foldername} ({len(wav_files)} files)")
         results = []
 
-        wav_files = [f for f in os.listdir(folder_path) if f.lower().endswith('.wav')]
-        if not wav_files:
-            print(f"⚠ No .wav files found in {folder_path}")
-            continue
-
-        executor_type = "Threads" if use_threads else "Processes"
-        print(f"Using {executor_type} for parallel processing")
-
-        with Executor() as executor:
+        with Executor(max_workers=2) as executor:
             futures = {executor.submit(process_file, foldername, folder_path, f): f for f in wav_files}
-
-            for future in tqdm(as_completed(futures), total=len(futures), desc=f"Files in {foldername}"):
-                result = future.result()
-                if result:
-                    results.append(result)
+            for future in tqdm(as_completed(futures), total=len(futures), desc=f"Extracting {int(F_MIN)}-{int(F_MAX)}Hz"):
+                res = future.result()
+                if res: results.append(res)
 
         if results:
+            # FIX: Ensure we use 'df' not 'dr'
             df = pd.DataFrame(results)
+            
+            # FIX: Correctly format the range label
+            range_label = f"{int(F_MIN)}-{int(F_MAX)}Hz"
+            
+            # Construct output path
+            out_name = os.path.join(folder_path, f"{foldername}_Summary_{range_label}")
+            
+            # Save files
+            df.to_csv(f"{out_name}.csv", index=False, encoding='utf-8-sig')
+            df.to_csv(f"{out_name}.txt", index=False, sep=',', encoding='utf-8')
+            print(f"✨ Success: Saved to {out_name}.csv")
 
-            # Reorder columns
-            cols = ['filename'] + [c for c in df.columns if c != 'filename']
-            df = df[cols].sort_values(by='filename').reset_index(drop=True)
-
-            # Ensure numeric columns
-            df = df.apply(pd.to_numeric, errors='ignore')
-
-            # Save CSV
-            output_csv = os.path.join(folder_path, f"{foldername}_boatman_alpha_acoustic_indices_results.csv")
-            df.to_csv(output_csv, index=False, encoding='utf-8-sig')
-            print(f"✔ Results saved for folder '{foldername}' at:\n{output_csv}")
-        else:
-            print(f"⚠ No audio files processed successfully in folder '{foldername}'.")
-
-# =============================
-# Acoustic indices summary table
-# =============================
-def print_acoustic_indices_summary():
-    """
-    Print a summary table of the acoustic indices used,
-    their key parameters, and a brief description.
-    """
-    data = [
-        ["VARf", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Variance of the frequency bins in the spectrogram"],
-        ["KURTf", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Kurtosis of the frequency distribution of the spectrogram"],
-        ["NBPEAKS", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Number of spectral peaks in the frequency range"],
-        ["BGNf", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Background noise estimate of the frequency spectrum"],
-        ["EAS", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Acoustic entropy across frequency bins"],
-        ["ECV", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Coefficient of variation of the energy across frequency bins"],
-        ["EPS", f"threshold={temporal_threshold_db} dB", "Entropy of the temporal amplitude signal"],
-        ["EPS_KURT", f"threshold={temporal_threshold_db} dB", "Kurtosis of temporal entropy"],
-        ["ACI", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Acoustic Complexity Index, measuring amplitude variation across time and frequency"],
-        ["rBA", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Relative Bioacoustic Index, normalized energy in the frequency band"],
-        ["BI", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Bioacoustic Index, measures total energy in the band"],
-        ["ADI", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Acoustic Diversity Index, reflects the number of frequency bins with significant activity"],
-        ["EVNspMean", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Mean of the Event-based Normalized Spectrogram"],
-        ["TFSD", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Temporal Frequency Spectrum Density"],
-        ["RAOQ", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Rao's Quadratic Entropy, diversity index in frequency domain"],
-        ["AGI", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Acoustic Grouping Index, measures clustering of acoustic events"],
-        ["aROI", f"fmin={spectral_fmin}, fmax={spectral_fmax}", "Acoustic Region of Interest index, energy in a specific band"],
-        ["MEANt", f"threshold={temporal_threshold_db} dB", "Mean amplitude of temporal signal above threshold"],
-        ["SKEWt", f"threshold={temporal_threshold_db} dB", "Skewness of temporal amplitude distribution"],
-        ["KURTt", f"threshold={temporal_threshold_db} dB", "Kurtosis of temporal amplitude distribution"],
-        ["Ht", f"threshold={temporal_threshold_db} dB", "Shannon entropy of the temporal signal"],
-        ["EVNtMean", f"threshold={temporal_threshold_db} dB", "Mean of temporal event-based normalized signal"],
-        ["EVNtCount", f"threshold={temporal_threshold_db} dB", "Count of temporal events above threshold"]
-    ]
-
-    df_summary = pd.DataFrame(data, columns=["Index", "Parameters", "Description"])
-    print("\n🎶 Acoustic Indices Summary Table")
-    print(df_summary.to_string(index=False))
-
-    # Optional: save summary table to CSV in main directory
-    try:
-        summary_csv = os.path.join(main_directory, "boatman_acoustic_indices_summary.csv")
-        df_summary.to_csv(summary_csv, index=False, encoding='utf-8-sig')
-        print(f"\n✔ Acoustic indices summary saved as CSV at:\n{summary_csv}")
-    except Exception as e:
-        print(f"\n⚠ Could not save summary CSV to main directory: {e}")
-
-
-# =============================
-# SCRIPT EXECUTION
-# =============================
 if __name__ == "__main__":
     main()
-    print_acoustic_indices_summary()
 ```
 
-## Analysis of acoustic indices data (R Studio) 
+## Spectral power analysis: visualisation 
+
+```
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(purrr)
+
+# Directory containing spectra
+data_dir <- "C:/Users/Administrador/OneDrive - McGill University/Light pollution and pond soundscapes/Jan 2026/.txt files for Bode magnitude plot"
+
+# List all .txt files
+files <- list.files(
+  path = data_dir,
+  pattern = "\\.txt$",
+  full.names = TRUE
+)
+
+# Read and annotate all files
+spectra_all <- map_dfr(files, function(f) {
+  
+  df <- read.table(f, header = TRUE, sep = "\t")
+  fname <- basename(f)
+  
+  phase <- str_extract(fname, "Phase_[I]{1,3}")
+  
+  site <- fname |>
+    str_remove("^spectrum_") |>
+    str_remove("_[0-9]{2}.*") |>
+    str_remove("_Phase_[I]{1,3}")
+  
+  df %>%
+    mutate(
+      Site  = site,
+      Phase = phase
+    )
+})
+
+# Order phases
+spectra_all$Phase <- factor(
+  spectra_all$Phase,
+  levels = c("Phase_I", "Phase_II", "Phase_III")
+)
+
+# Phase colors
+phase_colors <- c(
+  "Phase_I"   = "black",
+  "Phase_II"  = "#E69F00",
+  "Phase_III" = "#56B4E9"
+)
+
+# Output directory
+out_dir <- file.path(data_dir, "Bode_plots")
+dir.create(out_dir, showWarnings = FALSE)
+
+# ===============================
+# GLOBAL AXIS LIMITS
+# ===============================
+
+fmax <- 46000  # 46 kHz
+
+ymin <- floor(min(spectra_all$Level..dB., na.rm = TRUE) / 2) * 2
+ymax <- ceiling(max(spectra_all$Level..dB., na.rm = TRUE) / 2) * 2
+
+y_breaks <- seq(ymin, ymax, by = 2)
+
+# ===============================
+# Plot one Bode magnitude per site
+# ===============================
+
+sites <- unique(spectra_all$Site)
+
+for (s in sites) {
+  
+  df_site <- spectra_all %>%
+    filter(Site == s, Frequency..Hz. <= fmax)
+  
+  p <- ggplot(
+    df_site,
+    aes(x = Frequency..Hz., y = Level..dB., color = Phase)
+  ) +
+    geom_line() +
+    scale_color_manual(values = phase_colors) +
+    scale_x_continuous(
+      name = "Frequency (kHz)",
+      limits = c(0, fmax),
+      breaks = seq(0, fmax, by = 5000),
+      labels = function(x) x / 1000
+    ) +
+    scale_y_continuous(
+      name = "Magnitude (dB)",
+      limits = c(ymin, ymax),
+      breaks = y_breaks
+    ) +
+    labs(
+      title = paste("Bode Magnitude Spectrum –", s),
+      color = "Phase"
+    ) +
+    theme_bw()
+  
+  ggsave(
+    filename = file.path(out_dir, paste0("Bode_", s, "_46_kHz.jpeg")),
+    plot = p,
+    dpi = 300,
+    width = 8,
+    height = 6,
+    units = "in"
+  )
+}
+
+```
+
+## Dimensionality reduction and statistical modeling
 
 ```
 # =====================================================
@@ -221,10 +544,10 @@ library(nlme)
 library(car)
 library(ggplot2)
 
-# Set your directory
-dir_path <- "C:/Users/Administrador/OneDrive - McGill University/Light pollution and pond soundscapes/Jan 2026"
+# Set your dire
 
-# =====================================================
+setwd("C:\Users\Administrador\Downloads\Spectrally subset .txt files")
+
 # 2. DATA LOADING & FILENAME EXTRACTION
 # =====================================================
 txt_files <- list.files(path = dir_path, pattern = "(?i)\\.txt$", 
@@ -357,6 +680,52 @@ qqline(df_final$final_res, col = "red")
 plot(final_model, resid(., type = "normalized") ~ fitted(.), main = "Final Residuals vs Fitted")
 par(mfrow = c(1, 1))
 
+# --- 1. Basic Diagnostics ---
+res <- residuals(final_model, type = "pearson") 
+fitted_vals <- predict(final_model)
+total_n <- length(res)
+
+# --- 2. Extract Data and Design Matrix ---
+# We try to get the data frame used in the model
+df_data <- getData(final_model)
+
+# Reconstruct the Design Matrix (X) for Fixed Effects
+X <- model.matrix(~ Treatment, data = df_data)
+
+# --- 3. Manual Leverage Approximation ---
+# Leverage (h) is the diagonal of the Hat Matrix
+# Using solve(t(X) %*% X) assumes a standard OLS-style leverage approximation
+# which is the standard diagnostic for influence in large LMM datasets
+hat_matrix_diag <- diag(X %*% solve(t(X) %*% X) %*% t(X))
+
+# --- 4. Manual Cook's Distance Calculation ---
+# Formula: D = (res^2 / p) * (h / (1-h))
+p_fixed <- length(fixef(final_model)) 
+cooks_d <- (res^2 / p_fixed) * (hat_matrix_diag / (1 - hat_matrix_diag))
+
+# --- 5. Normality & Skewness ---
+if(!require(moments)) install.packages("moments")
+library(moments)
+skew_val <- skewness(res)
+
+# --- 6. Generate Summary Table ---
+diagnostic_summary <- data.frame(
+  Metric = c("Total N", 
+             "Max Std. Residual", 
+             "Outliers (>3 SD) %",
+             "Skewness", 
+             "Max Cook's Distance",
+             "Influential Points (>4/N)"),
+  Value = c(total_n, 
+            round(max(res), 3), 
+            round((sum(abs(res) > 3) / total_n) * 100, 2),
+            round(skew_val, 3), 
+            round(max(cooks_d), 3),
+            sum(cooks_d > (4/total_n)))
+)
+
+print(diagnostic_summary)
+
 # =====================================================
 # 7. FINAL VISUALIZATION WITH SIGNIFICANCE STARS
 # =====================================================
@@ -398,7 +767,7 @@ final_plot <- ggplot(plot_data_clean, aes(x = Treatment, y = est, group = Site))
   geom_text(data = stars_data, aes(x = Treatment, y = y_pos, label = label), 
             vjust = 0, size = 6, fontface = "bold", color = "black") +
   facet_wrap(~Site) +
-  scale_color_manual(values = c("Phase I" = "black", "Phase II" = "#E69F00", "Phase III" = "grey50")) +
+  scale_color_manual(values = c("Phase I" = "black", "Phase II" = "#E69F00", "Phase III" = "#56B4E9")) +
   theme_bw() +
   labs(
     x = "Experimental phase",
@@ -416,9 +785,19 @@ print(final_plot)
 # 8. EXPORT FOR PUBLICATION (300 DPI PDF)
 # =====================================================
 ggsave(
-  filename = file.path(dir_path, "Pond_Acoustic_Final_Stars.pdf"),
+  filename = file.path(dir_path, "Modelling 1 - 10 kHz.pdf"),
   plot = final_plot,
   device = "pdf",
+  width = 6, 
+  height = 7, 
+  units = "in",
+  dpi = 300
+)
+
+ggsave(
+  filename = file.path(dir_path, "Modelling 1 - 10 kHz.jpeg"),
+  plot = final_plot,
+  device = "jpeg",
   width = 6, 
   height = 7, 
   units = "in",
@@ -457,7 +836,7 @@ biplot_pc1_pc2 <- autoplot(pca_final, data = df_final, colour = 'Treatment',
                            loadings.label = TRUE, loadings.label.size = 4,
                            loadings.label.colour = 'black',
                            alpha = 0.3) +
-  scale_color_manual(values = c("Phase I" = "black", "Phase II" = "#E69F00", "Phase III" = "grey60")) +
+  scale_color_manual(values = c("Phase I" = "black", "Phase II" = "#E69F00", "Phase III" = "#56B4E9")) +
   theme_bw() +
   labs(title = "",
        subtitle = "")
@@ -465,982 +844,9 @@ biplot_pc1_pc2 <- autoplot(pca_final, data = df_final, colour = 'Treatment',
 print(biplot_pc1_pc2)
 
 # Save biplot
-ggsave(file.path(dir_path, "PCA_Biplot.pdf"), plot = biplot_pc1_pc2, width = 8, height = 6, dpi = 300)
-```
-
-### Light treatment vs pre-light treatment (1 kHz - 10 kHz) as shown by key acoustic indices
-
-![Image](https://github.com/user-attachments/assets/f2104c4f-8cf8-408a-9339-2aacc04a422a) 
-
-Darker red bars further to the left indicate _lower_ values of acoustic indices during the preiod when the light was on. Therefore, possibly _less_ stridulation but will need to check this against count data and what it is the acoustic index is measuring exactly. 
-
-Darker blue bars further to the right indicate _higher_ values of acoustic indices during the preiod when the light was on. Therefore, possibly _more_ stridulation but will need to check this against count data and what it is the acoustic index is measuring exactly. 
-
-Empty spaces / no bars indicated a non-signifcant result for that acoustic index. 
-
-## False-colour spectrograms 
-
-### Old Sneed Park - 25th August 2025
-
-```
-# === LIBRARIES ===
-library(tuneR)
-library(seewave)
-library(signal)
-library(entropy)
-library(dplyr)
-library(ggplot2)
-library(grDevices)
-library(patchwork) 
-
-# === CONFIGURATION ===
-# NOTE: User MUST change this path to their local directory
-directory <- "C:/Users/Administrador/Downloads/Light pollution sound files/OSP_2_25.08.2025/OSP_2_25.08.2025"
-
-cat("Checking directory:", directory, "\n")
-
-if (!dir.exists(directory)) stop("The specified directory does not exist.")
-
-file_list <- list.files(directory, pattern = "\\.WAV$", full.names = TRUE)
-
-if (length(file_list) == 0) stop("No .WAV files found in the directory.")
-cat("Found", length(file_list), "files.\n")
-
-# === METRIC FUNCTIONS ===
-calculate_entropy <- function(freq_bin) {
-  total_energy <- sum(freq_bin)
-  if (total_energy == 0) return(0)
-  p <- freq_bin / total_energy
-  -sum(p * log(p + 1e-10))
-}
-
-calculate_aci <- function(freq_bin) {
-  local_maxima <- sum(diff(sign(diff(freq_bin))) == -2)
-  local_maxima / length(freq_bin)
-}
-
-calculate_background_noise <- function(freq_bin) {
-  median(freq_bin)
-}
-
-# === STORAGE ===
-entropy_list <- list()
-aci_list <- list()
-background_noise_list <- list()
-
-# === LOOP THROUGH FILES (REQUIRED FOR DATA GENERATION) ===
-for (audio_file in file_list) {
-  try({
-    wave <- readWave(audio_file)
-    y <- wave@left
-    sr <- wave@samp.rate
-    
-    n_fft <- 16384
-    hop_length <- n_fft / 2
-    
-    sg <- specgram(y, n = n_fft, Fs = sr, overlap = n_fft - hop_length)
-    S <- abs(sg$S)
-    S <- S / max(S)
-    S_db <- 10 * log10(S + 1e-10)
-    
-    entropy_values <- apply(S_db, 1, calculate_entropy)
-    aci_values <- apply(S_db, 1, calculate_aci)
-    noise_values <- apply(S_db, 1, calculate_background_noise)
-    
-    freq_bins <- seq(0, sr / 2, length.out = n_fft / 2 + 1)[1:nrow(S_db)]
-    
-    entropy_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
-                                                       Frequency = freq_bins,
-                                                       Entropy = entropy_values)
-    aci_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
-                                                   Frequency = freq_bins,
-                                                   ACI = aci_values)
-    background_noise_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
-                                                                Frequency = freq_bins,
-                                                                Background_Noise = noise_values)
-  }, silent = TRUE)
-}
-
-# === COMBINE AND PROCESS METRICS ===
-entropy_all <- do.call(rbind, entropy_list)
-aci_all <- do.call(rbind, aci_list)
-background_noise_all <- do.call(rbind, background_noise_list)
-
-# === EXTRACT TIME FROM FILENAMES ===
-extract_time <- function(df) {
-  df %>%
-    mutate(TimeString = substr(File, 10, 15)) %>%
-    select(-File)
-}
-
-entropy_all <- extract_time(entropy_all)
-aci_all <- extract_time(aci_all)
-background_noise_all <- extract_time(background_noise_all)
-
-# === NEW: ADD FULL DATETIME TO HANDLE OVERNIGHT ===
-add_datetime <- function(df) {
-  df %>%
-    mutate(
-      Hour = as.numeric(substr(TimeString, 1, 2)),
-      Date = ifelse(Hour < 12, "2025-08-26", "2025-08-25"), 
-      TimeStr = paste0(substr(TimeString, 1, 2), ":",
-                       substr(TimeString, 3, 4), ":",
-                       substr(TimeString, 5, 6)),
-      Time = as.POSIXct(paste(Date, TimeStr), format = "%Y-%m-%d %H:%M:%S", tz = "UTC")
-    ) %>%
-    select(-TimeString, -Hour, -Date, -TimeStr) 
-}
-
-entropy_all <- add_datetime(entropy_all)
-aci_all <- add_datetime(aci_all)
-background_noise_all <- add_datetime(background_noise_all)
-
-# === SCALE INDICES ===
-scale_vec <- function(x) (x - min(x)) / (max(x) - min(x))
-
-entropy_all$Scaled_Entropy <- scale_vec(entropy_all$Entropy)
-aci_all$Scaled_ACI <- scale_vec(aci_all$ACI)
-background_noise_all$Scaled_Background_Noise <- scale_vec(background_noise_all$Background_Noise)
-
-# === COMBINE RGB ===
-combined_data <- data.frame(
-  Scaled_Entropy = entropy_all$Scaled_Entropy,
-  Scaled_ACI = aci_all$Scaled_ACI,
-  Scaled_Background_Noise = background_noise_all$Scaled_Background_Noise
-)
-
-RGB_Data <- data.frame(Color = rgb(
-  combined_data$Scaled_Entropy,
-  combined_data$Scaled_ACI,
-  combined_data$Scaled_Background_Noise
-))
-
-# === CREATE FINAL DATA FRAME (with kHz) ===
-combined_df <- data.frame(
-  Frequency = entropy_all$Frequency / 1000, 
-  Time = entropy_all$Time,
-  Color = RGB_Data$Color
-)
-
-# === REMOVE BACKGROUND NOISE ===
-hex_table <- table(combined_df$Color)
-hex_df <- as.data.frame(hex_table)
-colnames(hex_df) <- c("HEX", "Count")
-threshold <- quantile(hex_df$Count, 0.9)
-dominant_hexes <- hex_df$HEX[hex_df$Count >= threshold]
-
-replace_dominant_hex <- function(color) {
-  if (color %in% dominant_hexes) "#000000" else color
-}
-
-combined_df$Adjusted_Color <- sapply(combined_df$Color, replace_dominant_hex)
-
-
-# ====================================================================
-# === PERIOD DEFINITION AND PLOTTING SETUP ===
-
-# === DEFINE EXPERIMENTAL PERIODS (Corrected Date Alignment) ===
-periods <- data.frame(
-  Label = c("Natural darkness (Phase I)", "Light treatment (Phase II)", "Natural darkness (Phase III)"),
-  Start = as.POSIXct(c("2025-08-25 21:11:00",
-                       "2025-08-25 22:11:00", "2025-08-25 23:11:00"), tz = "UTC"),
-  # CORRECTED: Phase I End adjusted to 22:07:00 for clean transition
-  End = as.POSIXct(c("2025-08-25 22:11:00",
-                     "2025-08-25 23:11:00", "2025-08-26 00:11:00"), tz = "UTC"), 
-  Fill = c("gray60", "#FFC300", "gray60")
-)
-
-
-# === DEFINE PADDED Y-AXIS LIMITS (in kHz) ===
-# This assumes combined_df is now populated.
-y_max <- max(combined_df$Frequency) 
-y_min_padded <- -0.5 
-y_max_padded <- y_max + 0.5 
-
-# === PLOT MAIN SPECTROGRAM ===
-# NOTE: Using the full combined_df and letting scale_x_datetime define the visible range.
-p_spec <- ggplot(combined_df, aes(x = Time, y = Frequency)) +
-  geom_tile(aes(fill = Adjusted_Color)) +
-  scale_fill_identity() +
-  scale_x_datetime(limits = c(min(periods$Start), max(periods$End)), 
-                   date_breaks = "15 min", 
-                   date_labels = "%H:%M") + 
-  scale_y_continuous(limits = c(y_min_padded, y_max_padded), expand = c(0, 0), 
-                     breaks = seq(from = 0, to = y_max_padded, by = 5)) +
-  labs(x = "Time", y = "Frequency (kHz)") +
-  theme_bw() +
-  theme(
-    axis.title.x = element_blank(),
-    axis.text.x = element_text(angle = 0, hjust = 1), 
-    axis.ticks.x = element_line(),                    
-    plot.margin = margin(0, 5, 0, 5)
-  )
-
-# === PERIOD BAR PLOT ===
-p_periods <- ggplot(periods, aes(xmin = Start, xmax = End, ymin = 0, ymax = 1, fill = Fill)) +
-  geom_rect(color = "white") +
-  geom_text(aes(x = (Start + (End - Start) / 2),
-                y = 0.5, label = Label),
-            color = "black", size = 4, fontface = "bold") +
-  scale_fill_identity() +
-  scale_x_datetime(limits = c(min(periods$Start), max(periods$End))) +
-  scale_y_continuous(expand = c(0, 0)) +
-  theme_void() +
-  theme(
-    axis.text.x = element_blank(),
-    axis.ticks.x = element_blank(),
-    plot.margin = margin(5, 5, 0, 5)
-  )
-
-# === COMBINE USING patchwork ===
-final_plot <- p_spec / p_periods + plot_layout(heights = c(1, 0.075)) 
-
-# === SAVE ===
-ggsave("25.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.pdf", plot = final_plot, width = 10, height = 7, dpi = 300)
-
-cat("Plot saved as 25.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.pdf\n")
-
-ggsave("25.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.jpeg", plot = final_plot, width = 10, height = 7, dpi = 300)
-
-cat("Plot saved as 25.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.jpeg\n"
+ggsave(file.path(dir_path, "PCA_Biplot 1 - 10 kHz.pdf"), plot = biplot_pc1_pc2, width = 8, height = 6, dpi = 300)
 
 ```
 
-### Old Sneed Park 26th August 2024
-
-```
-# === LIBRARIES ===
-library(tuneR)
-library(seewave)
-library(signal)
-library(entropy)
-library(dplyr)
-library(ggplot2)
-library(grDevices)
-library(patchwork)
-
-# === CONFIGURATION ===
-# NOTE: User MUST change this path to their local directory
-directory <- "C:/Users/Administrador/Downloads/Light pollution sound files/OSP_26.08.2024/OSP_26.08.2024"
-
-cat("Checking directory:", directory, "\n")
-
-if (!dir.exists(directory)) stop("The specified directory does not exist.")
-
-file_list <- list.files(directory, pattern = "\\.WAV$", full.names = TRUE)
-
-if (length(file_list) == 0) stop("No .WAV files found in the directory.")
-cat("Found", length(file_list), "files.\n")
-
-# === METRIC FUNCTIONS ===
-calculate_entropy <- function(freq_bin) {
-  total_energy <- sum(freq_bin)
-  if (total_energy == 0) return(0)
-  p <- freq_bin / total_energy
-  -sum(p * log(p + 1e-10))
-}
-
-calculate_aci <- function(freq_bin) {
-  local_maxima <- sum(diff(sign(diff(freq_bin))) == -2)
-  local_maxima / length(freq_bin)
-}
-
-calculate_background_noise <- function(freq_bin) {
-  median(freq_bin)
-}
-
-# === STORAGE ===
-entropy_list <- list()
-aci_list <- list()
-background_noise_list <- list()
-
-# === LOOP THROUGH FILES ===
-for (audio_file in file_list) {
-  try({
-    wave <- readWave(audio_file)
-    y <- wave@left
-    sr <- wave@samp.rate
-    
-    n_fft <- 16384
-    hop_length <- n_fft / 2
-    
-    sg <- specgram(y, n = n_fft, Fs = sr, overlap = n_fft - hop_length)
-    S <- abs(sg$S)
-    S <- S / max(S)
-    S_db <- 10 * log10(S + 1e-10)
-    
-    entropy_values <- apply(S_db, 1, calculate_entropy)
-    aci_values <- apply(S_db, 1, calculate_aci)
-    noise_values <- apply(S_db, 1, calculate_background_noise)
-    
-    freq_bins <- seq(0, sr / 2, length.out = n_fft / 2 + 1)[1:nrow(S_db)]
-    
-    entropy_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
-                                                       Frequency = freq_bins,
-                                                       Entropy = entropy_values)
-    aci_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
-                                                   Frequency = freq_bins,
-                                                   ACI = aci_values)
-    background_noise_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
-                                                                Frequency = freq_bins,
-                                                                Background_Noise = noise_values)
-  }, silent = TRUE)
-}
-
-# === COMBINE AND PROCESS METRICS ===
-entropy_all <- do.call(rbind, entropy_list)
-aci_all <- do.call(rbind, aci_list)
-background_noise_all <- do.call(rbind, background_noise_list)
-
-# === EXTRACT TIME FROM FILENAMES ===
-extract_time <- function(df) {
-  df %>%
-    mutate(TimeString = substr(File, 10, 15)) %>%
-    select(-File)
-}
-
-entropy_all <- extract_time(entropy_all)
-aci_all <- extract_time(aci_all)
-background_noise_all <- extract_time(background_noise_all)
-
-# === ADD FULL DATETIME (for overnight recording) ===
-add_datetime <- function(df) {
-  df %>%
-    mutate(
-      Hour = as.numeric(substr(TimeString, 1, 2)),
-      Date = ifelse(Hour < 12, "2024-08-27", "2024-08-26"), 
-      TimeStr = paste0(substr(TimeString, 1, 2), ":",
-                       substr(TimeString, 3, 4), ":",
-                       substr(TimeString, 5, 6)),
-      Time = as.POSIXct(paste(Date, TimeStr), format = "%Y-%m-%d %H:%M:%S", tz = "UTC")
-    ) %>%
-    select(-TimeString, -Hour, -Date, -TimeStr)
-}
-
-entropy_all <- add_datetime(entropy_all)
-aci_all <- add_datetime(aci_all)
-background_noise_all <- add_datetime(background_noise_all)
-
-# === SCALE INDICES ===
-scale_vec <- function(x) (x - min(x)) / (max(x) - min(x))
-
-entropy_all$Scaled_Entropy <- scale_vec(entropy_all$Entropy)
-aci_all$Scaled_ACI <- scale_vec(aci_all$ACI)
-background_noise_all$Scaled_Background_Noise <- scale_vec(background_noise_all$Background_Noise)
-
-# === COMBINE RGB ===
-combined_data <- data.frame(
-  Scaled_Entropy = entropy_all$Scaled_Entropy,
-  Scaled_ACI = aci_all$Scaled_ACI,
-  Scaled_Background_Noise = background_noise_all$Scaled_Background_Noise
-)
-
-RGB_Data <- data.frame(Color = rgb(
-  combined_data$Scaled_Entropy,
-  combined_data$Scaled_ACI,
-  combined_data$Scaled_Background_Noise
-))
-
-# === CREATE FINAL DATA FRAME (with kHz) ===
-combined_df <- data.frame(
-  Frequency = entropy_all$Frequency / 1000, 
-  Time = entropy_all$Time,
-  Color = RGB_Data$Color
-)
-
-# === REMOVE BACKGROUND NOISE ===
-hex_table <- table(combined_df$Color)
-hex_df <- as.data.frame(hex_table)
-colnames(hex_df) <- c("HEX", "Count")
-threshold <- quantile(hex_df$Count, 0.9)
-dominant_hexes <- hex_df$HEX[hex_df$Count >= threshold]
-
-replace_dominant_hex <- function(color) {
-  if (color %in% dominant_hexes) "#000000" else color
-}
-
-combined_df$Adjusted_Color <- sapply(combined_df$Color, replace_dominant_hex)
-
-# ====================================================================
-# === PERIOD DEFINITION AND PLOTTING SETUP (UPDATED FOR OSP_26) ===
-periods <- data.frame(
-  Label = c("Natural darkness (Phase I)", 
-            "Light treatment (Phase II)", 
-            "Natural darkness (Phase III)"),
-  Start = as.POSIXct(c("2024-08-26 21:08:00",
-                       "2024-08-26 22:08:00",
-                       "2024-08-26 23:08:00"), tz = "UTC"),
-  End = as.POSIXct(c("2024-08-26 22:08:00",
-                     "2024-08-26 23:08:00",
-                     "2024-08-27 00:08:00"), tz = "UTC"),
-  Fill = c("gray60", "#FFC300", "gray60")
-)
-
-# === DEFINE PADDED Y-AXIS LIMITS (in kHz) ===
-y_max <- max(combined_df$Frequency) 
-y_min_padded <- -0.5 
-y_max_padded <- y_max + 0.5 
-
-# === PLOT MAIN SPECTROGRAM ===
-p_spec <- ggplot(combined_df, aes(x = Time, y = Frequency)) +
-  geom_tile(aes(fill = Adjusted_Color)) +
-  scale_fill_identity() +
-  scale_x_datetime(limits = c(min(periods$Start), max(periods$End)), 
-                   date_breaks = "15 min", 
-                   date_labels = "%H:%M") + 
-  scale_y_continuous(limits = c(y_min_padded, y_max_padded), expand = c(0, 0), 
-                     breaks = seq(from = 0, to = y_max_padded, by = 5)) +
-  labs(x = "Time", y = "Frequency (kHz)") +
-  theme_bw() +
-  theme(
-    axis.title.x = element_blank(),
-    axis.text.x = element_text(angle = 0, hjust = 1),
-    axis.ticks.x = element_line(),
-    plot.margin = margin(0, 5, 0, 5)
-  )
-
-# === PERIOD BAR PLOT ===
-p_periods <- ggplot(periods, aes(xmin = Start, xmax = End, ymin = 0, ymax = 1, fill = Fill)) +
-  geom_rect(color = "white") +
-  geom_text(aes(x = (Start + (End - Start) / 2),
-                y = 0.5, label = Label),
-            color = "black", size = 4, fontface = "bold") +
-  scale_fill_identity() +
-  scale_x_datetime(limits = c(min(periods$Start), max(periods$End))) +
-  scale_y_continuous(expand = c(0, 0)) +
-  theme_void() +
-  theme(
-    axis.text.x = element_blank(),
-    axis.ticks.x = element_blank(),
-    plot.margin = margin(5, 5, 0, 5)
-  )
-
-# === COMBINE USING patchwork ===
-final_plot <- p_spec / p_periods + plot_layout(heights = c(1, 0.075)) 
-
-# === SAVE ===
-ggsave("26.08.2024_fullfreq_periodbars_REVISED_RENAMED_KHZ.pdf", 
-       plot = final_plot, width = 10, height = 7, dpi = 300)
-cat("Plot saved as 26.08.2024_fullfreq_periodbars_REVISED_RENAMED_KHZ.pdf\n")
-
-ggsave("26.08.2024_fullfreq_periodbars_REVISED_RENAMED_KHZ.jpeg", 
-       plot = final_plot, width = 10, height = 7, dpi = 300)
-cat("Plot saved as 26.08.2024_fullfreq_periodbars_REVISED_RENAMED_KHZ.jpeg\n")
-```
-
-### Old Sneed Park 27th August 2025
-
-```
-# === LIBRARIES ===
-library(tuneR)
-library(seewave)
-library(signal)
-library(entropy)
-library(dplyr)
-library(ggplot2)
-library(grDevices)
-library(patchwork) 
-
-# === CONFIGURATION ===
-# NOTE: User MUST change this path to their local directory
-directory <- "C:/Users/Administrador/Downloads/Light pollution sound files/OSP_3_27.08.25/OSP_3_27.08.25"
-
-cat("Checking directory:", directory, "\n")
-
-if (!dir.exists(directory)) stop("The specified directory does not exist.")
-
-file_list <- list.files(directory, pattern = "\\.WAV$", full.names = TRUE)
-
-if (length(file_list) == 0) stop("No .WAV files found in the directory.")
-cat("Found", length(file_list), "files.\n")
-
-# === METRIC FUNCTIONS ===
-calculate_entropy <- function(freq_bin) {
-  total_energy <- sum(freq_bin)
-  if (total_energy == 0) return(0)
-  p <- freq_bin / total_energy
-  -sum(p * log(p + 1e-10))
-}
-
-calculate_aci <- function(freq_bin) {
-  local_maxima <- sum(diff(sign(diff(freq_bin))) == -2)
-  local_maxima / length(freq_bin)
-}
-
-calculate_background_noise <- function(freq_bin) {
-  median(freq_bin)
-}
-
-# === STORAGE ===
-entropy_list <- list()
-aci_list <- list()
-background_noise_list <- list()
-
-for (audio_file in file_list) {
-  try({
-    wave <- readWave(audio_file)
-    y <- wave@left
-    sr <- wave@samp.rate
-    
-    n_fft <- 16384
-    hop_length <- n_fft / 2
-    
-    sg <- specgram(y, n = n_fft, Fs = sr, overlap = n_fft - hop_length)
-    S <- abs(sg$S)
-    S <- S / max(S)
-    S_db <- 10 * log10(S + 1e-10)
-    
-    entropy_values <- apply(S_db, 1, calculate_entropy)
-    aci_values <- apply(S_db, 1, calculate_aci)
-    noise_values <- apply(S_db, 1, calculate_background_noise)
-    
-    freq_bins <- seq(0, sr / 2, length.out = n_fft / 2 + 1)[1:nrow(S_db)]
-    
-    entropy_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
-                                                       Frequency = freq_bins,
-                                                       Entropy = entropy_values)
-    aci_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
-                                                   Frequency = freq_bins,
-                                                   ACI = aci_values)
-    background_noise_list[[basename(audio_file)]] <- data.frame(File = basename(audio_file),
-                                                                Frequency = freq_bins,
-                                                                Background_Noise = noise_values)
-  }, silent = TRUE)
-}
-
-# === COMBINE AND PROCESS METRICS ===
-entropy_all <- do.call(rbind, entropy_list)
-aci_all <- do.call(rbind, aci_list)
-background_noise_all <- do.call(rbind, background_noise_list)
-
-# === EXTRACT TIME FROM FILENAMES ===
-extract_time <- function(df) {
-  df %>%
-    mutate(TimeString = substr(File, 10, 15)) %>%
-    select(-File)
-}
-
-entropy_all <- extract_time(entropy_all)
-aci_all <- extract_time(aci_all)
-background_noise_all <- extract_time(background_noise_all)
-
-# === NEW: ADD FULL DATETIME TO HANDLE OVERNIGHT ===
-add_datetime <- function(df) {
-  df %>%
-    mutate(
-      Hour = as.numeric(substr(TimeString, 1, 2)),
-      Date = ifelse(Hour < 12, "2025-08-28", "2025-08-27"), 
-      TimeStr = paste0(substr(TimeString, 1, 2), ":",
-                       substr(TimeString, 3, 4), ":",
-                       substr(TimeString, 5, 6)),
-      Time = as.POSIXct(paste(Date, TimeStr), format = "%Y-%m-%d %H:%M:%S", tz = "UTC")
-    ) %>%
-    select(-TimeString, -Hour, -Date, -TimeStr) 
-}
-
-entropy_all <- add_datetime(entropy_all)
-aci_all <- add_datetime(aci_all)
-background_noise_all <- add_datetime(background_noise_all)
-
-# === SCALE INDICES ===
-scale_vec <- function(x) (x - min(x)) / (max(x) - min(x))
-
-entropy_all$Scaled_Entropy <- scale_vec(entropy_all$Entropy)
-aci_all$Scaled_ACI <- scale_vec(aci_all$ACI)
-background_noise_all$Scaled_Background_Noise <- scale_vec(background_noise_all$Background_Noise)
-
-# === COMBINE RGB ===
-combined_data <- data.frame(
-  Scaled_Entropy = entropy_all$Scaled_Entropy,
-  Scaled_ACI = aci_all$Scaled_ACI,
-  Scaled_Background_Noise = background_noise_all$Scaled_Background_Noise
-)
-
-RGB_Data <- data.frame(Color = rgb(
-  combined_data$Scaled_Entropy,
-  combined_data$Scaled_ACI,
-  combined_data$Scaled_Background_Noise
-))
-
-# === CREATE FINAL DATA FRAME (with kHz) ===
-combined_df <- data.frame(
-  Frequency = entropy_all$Frequency / 1000, 
-  Time = entropy_all$Time,
-  Color = RGB_Data$Color
-)
-
-# === REMOVE BACKGROUND NOISE ===
-hex_table <- table(combined_df$Color)
-hex_df <- as.data.frame(hex_table)
-colnames(hex_df) <- c("HEX", "Count")
-threshold <- quantile(hex_df$Count, 0.9)
-dominant_hexes <- hex_df$HEX[hex_df$Count >= threshold]
-
-replace_dominant_hex <- function(color) {
-  if (color %in% dominant_hexes) "#000000" else color
-}
-
-combined_df$Adjusted_Color <- sapply(combined_df$Color, replace_dominant_hex)
-
-# For the plotting code to be runnable:
-# === DEFINE EXPERIMENTAL PERIODS (Original - REQUIRED) ===
-periods <- data.frame(
-  Label = c("Natural darkness (Phase I)", "Light treatment (Phase II)", "Natural darkness (Phase III)"),
-  Start = as.POSIXct(c("2025-08-27 21:07:00",
-                       "2025-08-27 22:07:00", "2025-08-27 23:07:00"), tz = "UTC"),
-  End = as.POSIXct(c("2025-08-27 22:11:00",
-                     "2025-08-27 23:07:00", "2025-08-28 00:07:00"), tz = "UTC"), 
-  Fill = c("gray60", "#FFC300", "gray60")
-)
-
-
-# === DEFINE PADDED Y-AXIS LIMITS (in kHz) ===
-# This assumes combined_df has been created and its Frequency column is in kHz
-y_max <- max(combined_df$Frequency) 
-y_min_padded <- -0.5 
-y_max_padded <- y_max + 0.5 
-
-# Placeholder values for demonstration (User must use the live values)
-y_max_placeholder <- 50 
-y_min_padded <- -0.5 
-y_max_padded <- y_max_placeholder + 0.5 
-
-# === PLOT MAIN SPECTROGRAM ===
-# NOTE: This plot assumes 'combined_df' (with Frequency in kHz) and 
-# 'Adjusted_Color' are available.
-p_spec <- ggplot(combined_df, aes(x = Time, y = Frequency)) +
-  geom_tile(aes(fill = Adjusted_Color)) +
-  scale_fill_identity() +
-  scale_x_datetime(limits = c(min(periods$Start), max(periods$End)), 
-                   date_breaks = "15 min", 
-                   date_labels = "%H:%M") + 
-  # Uses padded limits in kHz
-  scale_y_continuous(limits = c(y_min_padded, y_max_padded), expand = c(0, 0),
-                     breaks = seq(from = 0, to = y_max_padded, by = 5)) +
-  labs(x = "Time", y = "Frequency (kHz)") +
-  theme_bw() +
-  theme(
-    axis.title.x = element_blank(),
-    axis.text.x = element_text(angle = 0, hjust = 1), 
-    axis.ticks.x = element_line(),                    
-    plot.margin = margin(0, 5, 0, 5)
-  )
-
-p_spec
-
-# === PERIOD BAR PLOT ===
-p_periods <- ggplot(periods, aes(xmin = Start, xmax = End, ymin = 0, ymax = 1, fill = Fill)) +
-  geom_rect(color = "white") +
-  geom_text(aes(x = (Start + (End - Start) / 2),
-                y = 0.5, label = Label),
-            color = "black", size = 4, fontface = "bold") +
-  scale_fill_identity() +
-  scale_x_datetime(limits = c(min(periods$Start), max(periods$End))) +
-  scale_y_continuous(expand = c(0, 0)) +
-  theme_void() +
-  # Hide x-axis elements for the top (now bottom) plot to align perfectly
-  theme(
-    axis.text.x = element_blank(),
-    axis.ticks.x = element_blank(),
-    plot.margin = margin(5, 5, 0, 5)
-  )
-
-# === COMBINE USING patchwork ===
-# Swapped order to p_spec / p_periods to put spectrogram on top, period bar below.
-final_plot <- p_spec / p_periods + plot_layout(heights = c(1, 0.075)) 
-
-# === SAVE ===
-ggsave("27.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.pdf", plot = final_plot, width = 10, height = 7, dpi = 300)
-
-cat("Plot saved as 27.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.pdf\n")
-
-ggsave("27.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.jpeg", plot = final_plot, width = 10, height = 7, dpi = 300)
-
-cat("Plot saved as 27.08.2025_fullfreq_periodbars_REVISED_RENAMED_KHZ.jpeg\n")
-```
-
-## PCAs for all Old Sneed Park dates
-
-```
-# ===============================
-# 📦 Load Required Libraries
-# ===============================
-library(dplyr)
-library(lubridate)
-library(stringr)
-library(corrplot)
-library(caret)
-library(ggplot2)
-
-# ===============================
-# 🧩 Data Loading
-# ===============================
-# Load data
-Full_OSP_26_2024 <- read.csv("OSP_26_08_24_full_alpha_acoustic_indices_results.csv")
-Full_OSP_25_2025 <- read.csv("OSP_25_08_25_full_alpha_acoustic_indices_results.csv")
-Full_OSP_27_2025 <- read.csv("OSP_27_08_25_full_alpha_acoustic_indices_results.csv")
-
-# Merge all data sets into one
-merged_data <- rbind(Full_OSP_26_2024, Full_OSP_25_2025, Full_OSP_27_2025)
-head(merged_data)
-
-# ===============================
-# ⚙️ Numeric Data Preparation for PCA
-# ===============================
-# Subset numeric columns
-numeric_data <- merged_data[, 2:61]
-
-# --- FIX #1: Remove Zero-Variance Columns FIRST ---
-nzv_indices <- nearZeroVar(numeric_data, saveMetrics = FALSE)
-if (length(nzv_indices) > 0) {
-  cat("Removing", length(nzv_indices), "zero-variance columns:\n")
-  cat(paste(colnames(numeric_data)[nzv_indices], collapse = ", "), "\n")
-  numeric_data <- numeric_data[, -nzv_indices, drop = FALSE]
-} else {
-  cat("✅ No zero-variance columns found.\n")
-}
-
-# --- FIX #2: Remove Highly Correlated Features ---
-if (ncol(numeric_data) > 1) {
-  cor_matrix <- cor(numeric_data, use = "complete.obs")
-  high_corr_indices <- findCorrelation(cor_matrix, cutoff = 0.8, names = TRUE)
-  
-  if (length(high_corr_indices) > 0) {
-    cat("Removing", length(high_corr_indices), "highly correlated columns:\n")
-    cat(paste(high_corr_indices, collapse = ", "), "\n")
-    numeric_data <- numeric_data[, !colnames(numeric_data) %in% high_corr_indices, drop = FALSE]
-  } else {
-    cat("✅ No highly correlated features to remove.\n")
-  }
-}
-
-cat("✅ Final numeric columns for PCA:", ncol(numeric_data), "\n")
-if (ncol(numeric_data) < 2) {
-  stop("Not enough numeric columns with variation left for PCA. Check your data.")
-}
-
-# ===============================
-# 🕒 Metadata Preparation
-# ===============================
-metadata <- data.frame(Filename = merged_data$filename)
-
-metadata <- metadata %>%
-  mutate(
-    # FIX: Use a simple regex to extract just OSP_25 or OSP_27
-    Site = str_extract(Filename, "OSP_25|OSP_27"),
-    datetime_str = str_extract(Filename, "\\d{8}_\\d{6}"),
-    Datetime = as.POSIXct(datetime_str, format = "%Y%m%d_%H%M%S", tz = "UTC")
-  )
-
-# ===============================
-# # Add Treatment Periods (UPDATED SECTION)
-# ===============================
-metadata <- metadata %>%
-  mutate(
-    Treatment = case_when(
-      # OSP_25 Treatments (2025-08-25 to 2025-08-26)
-      (Datetime >= ymd_hms("2025-08-25 21:11:00") & Datetime < ymd_hms("2025-08-25 22:11:00")) ~ "Natural darkness (Phase I)",
-      (Datetime >= ymd_hms("2025-08-25 22:11:00") & Datetime < ymd_hms("2025-08-25 23:11:00")) ~ "Light treatment (Phase II)",
-      (Datetime >= ymd_hms("2025-08-25 23:11:00") & Datetime < ymd_hms("2025-08-26 00:11:00")) ~ "Natural darkness (Phase III)",
-      
-      # OSP_26 Treatments (2024-08-26 to 2024-08-27)
-      (Datetime >= ymd_hms("2025-08-26 21:08:00") & Datetime < ymd_hms("2024-08-26 22:08:00")) ~ "Natural darkness (Phase I)",
-      (Datetime >= ymd_hms("2025-08-26 22:08:00") & Datetime < ymd_hms("2024-08-26 23:08:00")) ~ "Light treatment (Phase II)",
-      (Datetime >= ymd_hms("2025-08-26 23:08:00") & Datetime < ymd_hms("2024-08-27 00:08:00")) ~ "Natural darkness (Phase III)",
-      
-      # OSP_27 Treatments (2025-08-27 to 2025-08-28)
-      (Datetime >= ymd_hms("2025-08-27 21:07:00") & Datetime < ymd_hms("2025-08-27 22:07:00")) ~ "Natural darkness (Phase I)",
-      (Datetime >= ymd_hms("2025-08-27 22:07:00") & Datetime < ymd_hms("2025-08-27 23:07:00")) ~ "Light treatment (Phase II)",
-      (Datetime >= ymd_hms("2025-08-27 23:07:00") & Datetime < ymd_hms("2025-08-28 00:07:00")) ~ "Natural darkness (Phase III)",
-      
-      TRUE ~ "Other"
-    )
-  )
-
-
-# ===============================
-# 📊 PCA Analysis
-# ===============================
-set.seed(123)
-pca_res <- prcomp(numeric_data, center = TRUE, scale. = TRUE)
-print(summary(pca_res))
-
-# Variance explained
-var_explained <- round(100 * (pca_res$sdev^2 / sum(pca_res$sdev^2)), 1)
-
-# Calculate Eigenvalues
-# Eigenvalues are the square of the standard deviations (sdev)
-eigenvalues <- pca_res$sdev^2
-
-# Name them for a clean output
-names(eigenvalues) <- paste0("PC", 1:length(eigenvalues))
-
-cat("--- Eigenvalues for each Component ---\n")
-print(eigenvalues)
-cat("\n")
-
-# Combine PCA scores with metadata
-pca_scores <- as.data.frame(pca_res$x)
-pca_scores$Site <- metadata$Site
-pca_scores$Treatment <- metadata$Treatment
-
-# ===============================
-# 🎨 PCA Plots with Treatment Colors & Site Shapes
-# ===============================
-# Define colors for Treatments
-Treatment_colors <- c(
-  "Natural darkness (Phase I)" = "gray60",
-  "Light treatment (Phase II)" = "#FFC300",
-  "Natural darkness (Phase III)" = "gray60"
-)
-
-# Define shapes for Sites
-Site_shapes <- c(
-  "OSP_25" = 16,  # circle
-  "OSP_27" = 17   # triangle
-)
-
-# Filter data for plotting
-pca_scores_filtered <- pca_scores %>%
-  filter(Treatment != "Other") %>%
-  mutate(
-    Treatment = factor(Treatment,
-                       levels = c("Natural darkness (Phase I)", 
-                                  "Light treatment (Phase II)", 
-                                  "Natural darkness (Phase III)")),
-    Site = factor(Site)
-  )
-
-# Check that both sites are present in the filtered data
-cat("\nSites included in the final plot data:\n")
-print(table(pca_scores_filtered$Site))
-cat("\n")
-
-# PCA plot (color=Treatment, shape=Site)
-p3 <- ggplot(pca_scores_filtered, aes(x = PC1, y = PC2, color = Treatment, shape = Site)) +
-  geom_point(size = 2, alpha = 0.7) +
-  # Ellipse is grouped by Treatment (the color variable)
-  stat_ellipse(aes(group = Treatment), level = 0.95, linetype = 2, size = 1) + 
-  scale_color_manual(values = Treatment_colors) + # Use Treatment colors
-  scale_shape_manual(values = Site_shapes) +     # Use Site shapes
-  theme_bw() +
-  labs(
-    x = paste0("PC1 (", sprintf("%.1f", var_explained[1]), "%)"),
-    y = paste0("PC2 (", sprintf("%.1f", var_explained[2]), "%)"),
-    color = "Treatment", 
-    shape = "Site"       
-  ) +
-  facet_wrap(~ Treatment, ncol = 3)
-
-print(p3)
-
-ggsave("Full_OSP_25_and_27_with_sites.jpeg", plot = p3, width = 10, height = 3.5, dpi = 300)
-
-
-#### Scree plot ####
-
-# ===============================
-# 📊 Scree Plot Visualization
-# ===============================
-
-# Make sure ggplot2 is loaded
-library(ggplot2)
-
-# 1. Create a data frame with the PCA variance information
-# We use the 'pca_res' object from the previous script
-pca_variance <- data.frame(
-  Component = paste0("PC", 1:length(pca_res$sdev)),
-  VarianceExplained = 100 * (pca_res$sdev^2 / sum(pca_res$sdev^2))
-)
-
-# Calculate cumulative variance
-pca_variance$CumulativeVariance <- cumsum(pca_variance$VarianceExplained)
-
-# Ensure components are in the correct order for plotting
-pca_variance$Component <- factor(pca_variance$Component, 
-                                 levels = pca_variance$Component)
-
-# ===============================
-# Plot 1: Classic Scree Plot (Bar Chart)
-# ===============================
-# This helps you find the "elbow"
-scree_plot_classic <- ggplot(pca_variance, aes(x = Component, y = VarianceExplained, group = 1)) +
-  geom_col(fill = "steelblue", alpha = 0.8) +
-  geom_point(size = 2, color = "darkred") +
-  geom_line(color = "darkred", linetype = "dashed") +
-  theme_bw() +
-  labs(
-    title = "Scree Plot",
-    x = "Principal Component",
-    y = "Percentage of Variance Explained"
-  ) +
-  theme(axis.text.x = element_text(angle = 60, hjust = 1))
-
-print(scree_plot_classic)
-
-# ===============================
-# Plot 2: Scree Plot with Cumulative Variance (Pareto Plot)
-# ===============================
-# This helps you decide how many components to keep
-scree_plot_cumulative <- ggplot(pca_variance, aes(x = Component)) +
-  # Bar plot for individual variance
-  geom_col(aes(y = VarianceExplained), fill = "steelblue", alpha = 0.8) +
-  
-  # Line and point plot for cumulative variance
-  geom_point(aes(y = CumulativeVariance), size = 2, color = "darkred") +
-  geom_line(aes(y = CumulativeVariance, group = 1), color = "darkred", linetype = "dashed") +
-  
-  # Add a horizontal line at 80% or 90% for reference
-  geom_hline(yintercept = 80, linetype = "dotted", color = "black", size = 1) +
-  
-  # Use a secondary y-axis to show cumulative percentage
-  scale_y_continuous(
-    name = "Percentage of variance explained",
-    sec.axis = sec_axis(~., name = "Cumulative variance (%)")
-  ) +
-  theme_bw() +
-  labs(
-    x = "Principal component",
-    y = "Percentage of variance explained"
-  ) +
-  theme(
-    axis.text.x = element_text(angle = 60, hjust = 1),
-    axis.title.y.right = element_text(color = "darkred"),
-    axis.text.y.right = element_text(color = "darkred")
-  )
-
-print(scree_plot_cumulative)
-
-# Save your preferred plot
-# ggsave("PCA_Scree_Plot.jpeg", plot = scree_plot_classic, width = 8, height = 5, dpi = 300)
-ggsave("PCA_Scree_Plot_Cumulative.jpeg", plot = scree_plot_cumulative, width = 8, height = 5, dpi = 300)
-
-#### PCA loadings ####
-
-# ===============================
-# 📊 PCA Loadings Extraction (FULL MATRIX)
-# ===============================
-library(dplyr)
-# tidyr is no longer needed since the second section is removed.
-
-# 1. Extract the raw loadings matrix
-# This matrix contains the correlation of each original variable (row) 
-# with each Principal Component (column).
-loadings_matrix <- pca_res$rotation
-
-# Convert to a data frame and add the variable names
-loadings_df <- as.data.frame(loadings_matrix) %>%
-  mutate(Acoustic_Index = rownames(.)) %>%
-  relocate(Acoustic_Index)
-
-# Display the full, un-filtered loadings matrix
-loadings_full_matrix <- loadings_df
-
-cat("--- Full PCA Loadings Matrix (All Indices vs. All Components) ---\n")
-# Note: Since this is a wide table, R may truncate the output columns
-print(loadings_full_matrix)
-cat("\n")
-
-head(loadings_full_matrix)
 
 ```
