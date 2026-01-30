@@ -532,40 +532,38 @@ for (s in sites) {
 
 ```
 # =====================================================
-# 1. SETUP & LIBRARIES
+# 0. LIBRARIES
 # =====================================================
 library(dplyr)
 library(stringr)
 library(lubridate)
-library(tidyr)
 library(purrr)
-library(broom)
-library(nlme)
-library(car)
+library(tidyr)
 library(ggplot2)
+library(nlme)
+library(broom)
+if(!require(moments)) install.packages("moments")
+library(moments)
 
-# Set your dire
-
-setwd("C:\Users\Administrador\Downloads\Spectrally subset .txt files")
-
-# 2. DATA LOADING & FILENAME EXTRACTION
 # =====================================================
-txt_files <- list.files(path = dir_path, pattern = "(?i)\\.txt$", 
-                        full.names = TRUE, recursive = TRUE)
+# 1. SET WORKING DIRECTORY
+# =====================================================
+dir_path <- "D:/Light pollution/Spectrally subset .txt files/2 - 4 kHz"
+setwd(dir_path)
 
-if(length(txt_files) == 0) stop("No .txt files found in the directory!")
+# =====================================================
+# 2. IMPORT ALL TXT FILES
+# =====================================================
+txt_files <- list.files(path = ".", pattern = "\\.txt$", full.names = TRUE)
+print(paste("Files found:", length(txt_files)))
 
 merged_df <- do.call(rbind, lapply(txt_files, function(f) {
-  tryCatch({
-    tmp <- read.table(f, header = TRUE, sep = ",", stringsAsFactors = FALSE)
-    file_base <- basename(f)
-    # Captures "2.0 - 4.0" from the filename
-    tmp$Bandwidth <- str_extract(file_base, "(?<=Summary_).*(?=\\.txt)")
-    return(tmp)
-  }, error = function(e) return(NULL))
+  read.csv(f, stringsAsFactors = FALSE)
 }))
 
-# Clean and extract metadata
+# =====================================================
+# 3. METADATA EXTRACTION & DATETIME
+# =====================================================
 merged_df <- merged_df %>%
   mutate(
     Site = case_when(
@@ -577,61 +575,75 @@ merged_df <- merged_df %>%
     ),
     raw_ts = str_extract(filename, "\\d{8}_\\d{6}"),
     Datetime = as.POSIXct(raw_ts, format = "%Y%m%d_%H%M%S", tz = "Europe/London"),
-    Exp_Date = as.Date(Datetime - hours(4)) 
-  ) %>% 
+    Exp_Date = as.Date(Datetime),
+    File_ID = filename,
+    Bandwidth = "2.0 - 4.0 kHz"
+  ) %>%
   filter(!is.na(Site), !is.na(Datetime))
 
 # =====================================================
-# 3. PHASE LOOKUP (Experimental Timing Logic)
+# 4. DEFINE TREATMENT ASSIGNMENT FUNCTION
 # =====================================================
-all_exp_dates <- unique(merged_df$Exp_Date)
+assign_treatment <- function(Site, Exp_Date) {
+  if (Site == "OSP" && Exp_Date == as.Date("2025-08-25")) {
+    data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
+               S = c("21:11", "22:11", "23:11"),
+               E = c("22:10", "23:10", "00:10"))
+  } else if (Site == "OSP" && Exp_Date == as.Date("2025-08-27")) {
+    data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
+               S = c("21:07", "22:07", "23:07"),
+               E = c("22:06", "23:06", "00:06"))
+  } else if (Site == "OSP") {
+    data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
+               S = c("21:08", "22:08", "23:08"),
+               E = c("22:07", "23:07", "00:07"))
+  } else if (Site == "UoBBG") {
+    data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
+               S = c("21:04", "22:04", "23:04"),
+               E = c("22:03", "23:03", "00:03"))
+  } else if (Site == "FF") {
+    data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
+               S = c("20:49", "21:49", "22:49"),
+               E = c("21:48", "22:48", "23:48"))
+  } else { 
+    data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
+               S = c("20:51", "21:51", "22:51"),
+               E = c("21:50", "22:50", "23:50"))
+  }
+}
 
-phase_lookup <- expand.grid(Site = c("EF", "FF", "OSP", "UoBBG"), 
-                            Exp_Date = all_exp_dates, 
-                            stringsAsFactors = FALSE) %>%
-  group_by(Site, Exp_Date) %>%
-  reframe({
-    if (Site == "OSP" && Exp_Date == as.Date("2025-08-25")) {
-      data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
-                 S = c("21:11", "22:11", "23:11"), E = c("22:10", "23:10", "00:10"))
-    } else if (Site == "OSP" && Exp_Date == as.Date("2025-08-27")) {
-      data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
-                 S = c("21:07", "22:07", "23:07"), E = c("22:06", "23:06", "00:06"))
-    } else if (Site == "OSP") {
-      data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
-                 S = c("21:08", "22:08", "23:08"), E = c("22:07", "23:07", "00:07"))
-    } else if (Site == "UoBBG") {
-      data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
-                 S = c("21:04", "22:04", "23:04"), E = c("22:03", "23:03", "00:03"))
-    } else if (Site == "FF") {
-      data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
-                 S = c("20:49", "21:49", "22:49"), E = c("21:48", "22:48", "23:48"))
-    } else { 
-      data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
-                 S = c("20:51", "21:51", "22:51"), E = c("21:50", "22:50", "23:50"))
-    }
-  }) %>%
+# =====================================================
+# 5. ASSIGN TREATMENTS AND FILTER BY TIME WINDOW
+# =====================================================
+df_final <- merged_df %>%
+  rowwise() %>%
+  mutate(phases = list(assign_treatment(Site, Exp_Date))) %>%
+  ungroup() %>%
+  tidyr::unnest(phases) %>%
   mutate(
-    P_Start = as.POSIXct(paste(Exp_Date, S), tz = "Europe/London"),
-    P_End   = as.POSIXct(paste(Exp_Date, E), tz = "Europe/London"),
-    P_End   = if_else(P_End <= P_Start, P_End + days(1), P_End)
-  )
-
-# Filter data to include only the defined experimental windows
-final_df <- merged_df %>%
-  left_join(phase_lookup, by = c("Site", "Exp_Date"), relationship = "many-to-many") %>%
-  filter(Datetime >= P_Start & Datetime <= P_End)
-
-# =====================================================
-# 4. INITIAL PCA & OUTLIER DETECTION
-# =====================================================
-pca_vars <- c("NDSI", "Bio_Energy", "Anthro_Energy", "RMS_Mean", "ZCR_Mean", "MFCC_4", "MFCC_7", "MFCC_8")
-pca_init <- prcomp(final_df[, pca_vars], center = TRUE, scale. = TRUE)
-
-df_init <- bind_cols(final_df, as.data.frame(pca_init$x)) %>%
+    Start = as.POSIXct(paste(Exp_Date, S), format = "%Y-%m-%d %H:%M", tz = "Europe/London"),
+    End = as.POSIXct(ifelse(E < S,
+                            paste(Exp_Date + 1, E),
+                            paste(Exp_Date, E)),
+                     format = "%Y-%m-%d %H:%M", tz = "Europe/London")
+  ) %>%
+  filter(Datetime >= Start & Datetime <= End) %>%
+  select(-S, -E) %>%
   mutate(Treatment = factor(Treatment, levels = c("Phase I", "Phase II", "Phase III")))
 
-# Run initial model to identify extreme anomalies
+# Check the start/end times
+df_final %>% distinct(Site, Exp_Date, Treatment, Start, End) %>% print(n = 100)
+
+# =====================================================
+# 6. INITIAL PCA & OUTLIER DETECTION
+# =====================================================
+pca_vars <- c("NDSI", "Bio_Energy", "Anthro_Energy", "RMS_Mean", "ZCR_Mean", "MFCC_4", "MFCC_7", "MFCC_8")
+
+# Initial PCA
+pca_init <- prcomp(df_final[, pca_vars], center = TRUE, scale. = TRUE)
+df_init <- bind_cols(df_final, as.data.frame(pca_init$x))
+
+# Initial LME model
 model_init <- lme(PC1 ~ Treatment, random = ~ 1 | Site,
                   correlation = corAR1(form = ~ 1 | Site/Exp_Date),
                   weights = varIdent(form = ~ 1 | Site),
@@ -639,24 +651,20 @@ model_init <- lme(PC1 ~ Treatment, random = ~ 1 | Site,
 
 df_init$norm_res <- residuals(model_init, type = "normalized")
 
-# Identify files where residual > 3 standard deviations
-outlier_list <- df_init %>% filter(abs(norm_res) > 3) %>% pull(filename)
-df_cleaned <- df_init %>% filter(!filename %in% outlier_list)
-
+# Identify extreme outliers
+outlier_list <- df_init %>% filter(abs(norm_res) > 3) %>% pull(File_ID)
+df_cleaned <- df_init %>% filter(!File_ID %in% outlier_list)
 message(paste("Removed", length(outlier_list), "outliers. Proceeding with Final Model..."))
 
 # =====================================================
-# 5. FINAL PCA & MODEL (On Cleaned Data)
+# 7. FINAL PCA & MODEL (On Cleaned Data)
 # =====================================================
-# Rerunning PCA ensures the acoustic axes aren't skewed by the outliers
 pca_final <- prcomp(df_cleaned[, pca_vars], center = TRUE, scale. = TRUE)
-
 df_final <- bind_cols(
-  df_cleaned %>% select(Datetime, filename, Bandwidth, Site, Exp_Date, Treatment),
+  df_cleaned %>% select(Datetime, File_ID, Bandwidth, Site, Exp_Date, Treatment),
   as.data.frame(pca_final$x)
-) %>% mutate(Treatment = factor(Treatment, levels = c("Phase I", "Phase II", "Phase III")))
+)
 
-# The "Gold Standard" Model: Accounts for Site variation, Time, and Heteroscedasticity
 final_model <- lme(
   PC1 ~ Treatment, 
   random = ~ 1 | Site,
@@ -667,12 +675,10 @@ final_model <- lme(
 )
 
 # =====================================================
-# 6. RESULTS & DIAGNOSTICS
+# 8. RESULTS & DIAGNOSTICS
 # =====================================================
-# 1. Statistical Summary
 print(summary(final_model))
 
-# 2. Final Assumption Checks
 df_final$final_res <- residuals(final_model, type = "normalized")
 par(mfrow = c(1, 2))
 qqnorm(df_final$final_res, main = "Final Q-Q Plot")
@@ -680,35 +686,18 @@ qqline(df_final$final_res, col = "red")
 plot(final_model, resid(., type = "normalized") ~ fitted(.), main = "Final Residuals vs Fitted")
 par(mfrow = c(1, 1))
 
-# --- 1. Basic Diagnostics ---
-res <- residuals(final_model, type = "pearson") 
+# Diagnostics
+res <- residuals(final_model, type = "pearson")
 fitted_vals <- predict(final_model)
 total_n <- length(res)
 
-# --- 2. Extract Data and Design Matrix ---
-# We try to get the data frame used in the model
 df_data <- getData(final_model)
-
-# Reconstruct the Design Matrix (X) for Fixed Effects
 X <- model.matrix(~ Treatment, data = df_data)
-
-# --- 3. Manual Leverage Approximation ---
-# Leverage (h) is the diagonal of the Hat Matrix
-# Using solve(t(X) %*% X) assumes a standard OLS-style leverage approximation
-# which is the standard diagnostic for influence in large LMM datasets
 hat_matrix_diag <- diag(X %*% solve(t(X) %*% X) %*% t(X))
-
-# --- 4. Manual Cook's Distance Calculation ---
-# Formula: D = (res^2 / p) * (h / (1-h))
-p_fixed <- length(fixef(final_model)) 
+p_fixed <- length(fixef(final_model))
 cooks_d <- (res^2 / p_fixed) * (hat_matrix_diag / (1 - hat_matrix_diag))
-
-# --- 5. Normality & Skewness ---
-if(!require(moments)) install.packages("moments")
-library(moments)
 skew_val <- skewness(res)
 
-# --- 6. Generate Summary Table ---
 diagnostic_summary <- data.frame(
   Metric = c("Total N", 
              "Max Std. Residual", 
@@ -723,16 +712,33 @@ diagnostic_summary <- data.frame(
             round(max(cooks_d), 3),
             sum(cooks_d > (4/total_n)))
 )
-
 print(diagnostic_summary)
 
 # =====================================================
-# 7. FINAL VISUALIZATION WITH SIGNIFICANCE STARS
+# 9. SAVE CLEANED DATA
+# =====================================================
+write.csv(df_final, "merged_cleaned_with_PCA_and_Phase.csv", row.names = FALSE)
+
+# =====================================================
+# 10. FINAL VISUALIZATION WITH SIGNIFICANCE STARS FACETED BY Exp_Date
 # =====================================================
 
-# 1. Calculate Site-specific p-values for Phase II
-site_stats <- df_final %>%
-  group_by(Site) %>%
+library(broom)
+library(ggplot2)
+library(dplyr)
+
+# Ensure Exp_Date is a factor with the exact order you want
+df_final$Exp_Date <- factor(df_final$Exp_Date, levels = as.Date(c(
+  "2024-09-03", "2024-09-04", "2024-08-28", 
+  "2024-08-26", "2025-08-25", "2025-08-27"
+)))
+
+# Custom facet order: bottom row = "2024-08-26", "2025-08-25", "2025-08-27"
+facet_levels_bottom <- as.Date(c("2024-08-26", "2025-08-25", "2025-08-27"))
+
+# Recalculate stars and plot data as before
+expdate_stats <- df_final %>%
+  group_by(Site, Exp_Date) %>%
   do(tidy(lm(PC1 ~ Treatment, data = .))) %>%
   filter(term == "TreatmentPhase II") %>%
   mutate(label = case_when(
@@ -742,31 +748,28 @@ site_stats <- df_final %>%
     TRUE            ~ ""
   ))
 
-# 2. Prepare plot data
 plot_data_clean <- df_final %>%
-  group_by(Site) %>%
+  group_by(Site, Exp_Date) %>%
   mutate(baseline = mean(PC1[Treatment == "Phase I"], na.rm = TRUE),
          PC1_Rel = PC1 - baseline) %>%
-  group_by(Site, Treatment) %>%
+  group_by(Site, Exp_Date, Treatment) %>%
   summarise(est = mean(PC1_Rel), se = sd(PC1_Rel)/sqrt(n()), .groups = 'drop')
 
-# 3. Merge stats with plot data to position stars
 stars_data <- plot_data_clean %>%
   filter(Treatment == "Phase II") %>%
-  left_join(site_stats %>% select(Site, label), by = "Site") %>%
-  mutate(y_pos = est + (1.96 * se) + 0.2) # Position star slightly above error bar
+  left_join(expdate_stats %>% select(Site, Exp_Date, label), by = c("Site", "Exp_Date")) %>%
+  mutate(y_pos = est + (1.96 * se) + 0.2)
 
-# 4. Generate the Plot
-final_plot <- ggplot(plot_data_clean, aes(x = Treatment, y = est, group = Site)) +
+# Generate the plot
+p <- final_plot <- ggplot(plot_data_clean, aes(x = Treatment, y = est, group = Site)) +
   geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
   geom_line(color = "grey70", linewidth = 1) + 
   geom_errorbar(aes(ymin = est - 1.96*se, ymax = est + 1.96*se, color = Treatment), 
                 width = 0.15, linewidth = 0.8) +
   geom_point(aes(color = Treatment), size = 3.5) +
-  # Add the stars here
   geom_text(data = stars_data, aes(x = Treatment, y = y_pos, label = label), 
             vjust = 0, size = 6, fontface = "bold", color = "black") +
-  facet_wrap(~Site) +
+  facet_wrap(~Exp_Date, nrow = 2, ncol = 3) +
   scale_color_manual(values = c("Phase I" = "black", "Phase II" = "#E69F00", "Phase III" = "#56B4E9")) +
   theme_bw() +
   labs(
@@ -779,74 +782,30 @@ final_plot <- ggplot(plot_data_clean, aes(x = Treatment, y = est, group = Site))
     panel.grid.minor = element_blank()
   )
 
-print(final_plot)
+print(p)
 
 # =====================================================
-# 8. EXPORT FOR PUBLICATION (300 DPI PDF)
+# 11. EXPORT FOR PUBLICATION (300 DPI PDF)
 # =====================================================
 ggsave(
-  filename = file.path(dir_path, "Modelling 1 - 10 kHz.pdf"),
-  plot = final_plot,
+  filename = ("Modelling 2.0 - 4.0 kHz.pdf"),
+  plot = p,
   device = "pdf",
-  width = 6, 
+  width = 8, 
   height = 7, 
   units = "in",
   dpi = 300
 )
 
 ggsave(
-  filename = file.path(dir_path, "Modelling 1 - 10 kHz.jpeg"),
-  plot = final_plot,
+  filename = ("Modelling 2.0 - 4.0 kHz.jpeg"),
+  plot = p,
   device = "jpeg",
-  width = 6, 
+  width = 8, 
   height = 7, 
   units = "in",
   dpi = 300
 )
 
-# =====================================================
-# 9. PCA INTERPRETATION (LOADINGS)
-# =====================================================
-
-# Extract the loadings (rotation) for the first few PCs
-loadings <- as.data.frame(pca_final$rotation[, 1:2]) # Looking at PC1 and PC2
-loadings$Index <- rownames(loadings)
-
-# Rename columns for clarity
-colnames(loadings) <- c("PC1_Loading", "PC2_Loading", "Index")
-
-# Sort by PC1 to see the strongest drivers
-loadings <- loadings %>%
-  select(Index, PC1_Loading, PC2_Loading) %>%
-  arrange(desc(abs(PC1_Loading)))
-
-print("PCA Loadings (Drivers of PC1):")
-print(loadings)
-
-# Export the loadings table to CSV for your supplementary materials
-write.csv(loadings, file.path(dir_path, "PCA_Loadings_Table.csv"), row.names = FALSE)
-
-# =====================================================
-# 10. PCA BIPLOT
-# =====================================================
-library(ggfortify)
-
-biplot_pc1_pc2 <- autoplot(pca_final, data = df_final, colour = 'Treatment',
-                           loadings = TRUE, loadings.colour = 'black',
-                           loadings.label = TRUE, loadings.label.size = 4,
-                           loadings.label.colour = 'black',
-                           alpha = 0.3) +
-  scale_color_manual(values = c("Phase I" = "black", "Phase II" = "#E69F00", "Phase III" = "#56B4E9")) +
-  theme_bw() +
-  labs(title = "",
-       subtitle = "")
-
-print(biplot_pc1_pc2)
-
-# Save biplot
-ggsave(file.path(dir_path, "PCA_Biplot 1 - 10 kHz.pdf"), plot = biplot_pc1_pc2, width = 8, height = 6, dpi = 300)
-
 ```
 
-
-```
