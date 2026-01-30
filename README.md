@@ -675,6 +675,37 @@ final_model <- lme(
 )
 
 # =====================================================
+# 7a. EXTRACT PCA LOADINGS AND TOP CONTRIBUTORS
+# =====================================================
+
+# Compute loadings from the final PCA
+pca_loadings <- pca_final$rotation[, 1:2]  # First 2 PCs
+
+# Convert to a tidy data frame using base R
+loadings_df <- data.frame(
+  Variable = rownames(pca_loadings),
+  PC1 = pca_loadings[, "PC1"],
+  PC2 = pca_loadings[, "PC2"],
+  stringsAsFactors = FALSE
+) %>%
+  pivot_longer(cols = starts_with("PC"), names_to = "PC", values_to = "Loading") %>%
+  mutate(AbsLoading = abs(Loading))
+
+# Identify top 3 contributing variables for each PC
+top_contributors <- loadings_df %>%
+  group_by(PC) %>%
+  slice_max(order_by = AbsLoading, n = 3) %>%
+  arrange(PC, -AbsLoading)
+
+# Print results
+top_contributors
+
+# Store first 2 PCs in df_final for plotting or further analysis
+df_final <- df_final %>%
+  mutate(PC1 = as.data.frame(pca_final$x)$PC1,
+         PC2 = as.data.frame(pca_final$x)$PC2)
+
+# =====================================================
 # 8. RESULTS & DIAGNOSTICS
 # =====================================================
 print(summary(final_model))
