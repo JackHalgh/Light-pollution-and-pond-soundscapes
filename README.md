@@ -544,7 +544,6 @@ library(foreach)
 library(doParallel)
 library(caret)
 
-# Detect cores and setup cluster (using n-1 to keep PC responsive)
 n_cores <- parallel::detectCores() - 1
 cl <- makeCluster(n_cores)
 registerDoParallel(cl)
@@ -631,7 +630,7 @@ df_global_treated <- df_global_proc %>%
   )
 
 # =====================================================
-# 3. PCA & OUTLIER DETECTION
+# 3. GLOBAL PCA & LOADINGS
 # =====================================================
 priority_vars <- c("ACI", "Bio_Energy", "Event_Count", "ZCR_Mean")
 spectral_vars <- c("ADI", "RMS_Mean", paste0("MFCC_", 1:13))
@@ -647,298 +646,166 @@ pca_vars <- setdiff(pca_vars_full, setdiff(removed_names, priority_vars))
 
 pca_res <- prcomp(df_scaled[, pca_vars], center=FALSE, scale.=FALSE)
 
-pca_scores <- as.data.frame(pca_res$x[, 1:2])
-pca_scores$distance <- mahalanobis(pca_scores, colMeans(pca_scores), cov(pca_scores))
-cutoff <- qchisq(0.999, df=2) 
+# Extract Loadings and Variance
+pca_loadings <- as.data.frame(pca_res$rotation[, 1:2]) %>%
+  mutate(Variable = rownames(.))
+write.csv(pca_loadings, "Global_PCA_Loadings.csv", row.names = FALSE)
 
 df_model <- cbind(df_scaled, PC1 = pca_res$x[,1], PC2 = pca_res$x[,2]) %>%
-  mutate(is_outlier = pca_scores$distance > cutoff) %>%
-  filter(!is_outlier) %>%
   arrange(Site, Exp_Date, Bandwidth, Datetime)
 
 # =====================================================
-# 4. MAIN BANDWIDTH LOOP & PERMUTATION
+# 4. MAIN LOOP: PERMUTATIONS FOR PC1 & PC2
 # =====================================================
 bands <- unique(df_model$Bandwidth)
-perm_results_list <- list()
+pcs_to_model <- c("PC1", "PC2")
+all_results_list <- list()
 
-# Initialize the text file for manuscript numbers
-cat("FULL MODEL SUMMARIES FOR MANUSCRIPT CITATION\n", file = "Model_Summaries_Full.txt", append = FALSE)
-cat("=====================================================\n\n", file = "Model_Summaries_Full.txt", append = TRUE)
+cat("STARTING DUAL PC PERMUTATION ANALYSIS\n")
 
-for(current_band in bands) {
-  cat("\n--- Processing Bandwidth:", current_band, "---\n")
-  sub_data <- df_model %>% filter(Bandwidth == current_band)
-  
-  # A. Observed Model
-  obs_model <- try(lme(
-    fixed = PC1 ~ Treatment,
-    random = ~ 1 | Site/Exp_Date, 
-    correlation = corAR1(form = ~ 1 | Site/Exp_Date),
-    data = sub_data,
-    control = lmeControl(opt = "optim", msMaxIter = 200)
-  ), silent = TRUE)
-  
-  if(inherits(obs_model, "try-error")) {
-    cat("Model failed for:", current_band, "\n")
-    next
+for(current_pc in pcs_to_model) {
+  for(current_band in bands) {
+    cat("\n--- PC:", current_pc, "| Band:", current_band, "---\n")
+    sub_data <- df_model %>% filter(Bandwidth == current_band)
+    
+    # A. Observed Model
+    model_formula <- as.formula(paste(current_pc, "~ Treatment"))
+    obs_model <- try(lme(
+      fixed = model_formula,
+      random = ~ 1 | Site/Exp_Date, 
+      correlation = corAR1(form = ~ 1 | Site/Exp_Date),
+      data = sub_data,
+      control = lmeControl(opt = "optim", msMaxIter = 200)
+    ), silent = TRUE)
+    
+    if(inherits(obs_model, "try-error")) next
+    
+    # Extract Observed values
+    summ_tab <- summary(obs_model)$tTable
+    obs_t_p2 <- summ_tab["TreatmentPhase II", "t-value"]
+    obs_t_p3 <- summ_tab["TreatmentPhase III", "t-value"]
+    beta_p2  <- summ_tab["TreatmentPhase II", "Value"]
+    se_p2    <- summ_tab["TreatmentPhase II", "Std.Error"]
+    beta_p3  <- summ_tab["TreatmentPhase III", "Value"]
+    se_p3    <- summ_tab["TreatmentPhase III", "Std.Error"]
+    
+    # B. Parallel Permutations
+    null_dist <- foreach(i = 1:999, .combine = 'rbind', .packages = 'nlme') %dopar% {
+      p_data <- sub_data
+      p_data$Treatment <- sample(sub_data$Treatment)
+      p_mod <- try(lme(fixed = model_formula, random = ~ 1 | Site/Exp_Date, 
+                       correlation = corAR1(form = ~ 1 | Site/Exp_Date),
+                       data = p_data, control = lmeControl(opt = "optim", msMaxIter = 100)), silent = TRUE)
+      if(!inherits(p_mod, "try-error")) {
+        return(c(p2 = summary(p_mod)$tTable["TreatmentPhase II", "t-value"],
+                 p3 = summary(p_mod)$tTable["TreatmentPhase III", "t-value"]))
+      } else { return(c(p2 = NA, p3 = NA)) }
+    }
+    
+    null_dist <- as.data.frame(null_dist)
+    p_val_p2 <- (sum(abs(na.omit(null_dist$p2)) >= abs(obs_t_p2)) + 1) / (length(na.omit(null_dist$p2)) + 1)
+    p_val_p3 <- (sum(abs(na.omit(null_dist$p3)) >= abs(obs_t_p3)) + 1) / (length(na.omit(null_dist$p3)) + 1)
+    
+    # Store everything
+    all_results_list[[paste0(current_pc, "_", current_band)]] <- data.frame(
+      Component = current_pc,
+      Bandwidth = current_band,
+      Beta_P2 = beta_p2, SE_P2 = se_p2, Perm_P_P2 = p_val_p2,
+      Beta_P3 = beta_p3, SE_P3 = se_p3, Perm_P_P3 = p_val_p3
+    )
   }
-  
-  # EXPORT FULL SUMMARY TO TXT
-  cat("-----------------------------------------------------\n", file = "Model_Summaries_Full.txt", append = TRUE)
-  cat("BANDWIDTH:", current_band, "\n", file = "Model_Summaries_Full.txt", append = TRUE)
-  cat("-----------------------------------------------------\n", file = "Model_Summaries_Full.txt", append = TRUE)
-  sum_out <- capture.output(summary(obs_model))
-  cat(paste(sum_out, collapse = "\n"), file = "Model_Summaries_Full.txt", append = TRUE)
-  cat("\n\n", file = "Model_Summaries_Full.txt", append = TRUE)
-  
-  # B. High-Impact Diagnostics
-  png(paste0("Diag_", gsub(" ", "_", current_band), ".png"), width = 1000, height = 800)
-  par(mfrow = c(2, 2))
-  res_norm <- residuals(obs_model, type = "normalized")
-  qqnorm(res_norm, main = "Q-Q Plot"); qqline(res_norm, col="red")
-  plot(fitted(obs_model), res_norm, main = "Resid vs Fitted", pch=20, col=rgb(0,0,0,0.3))
-  abline(h=0, col="blue")
-  acf(res_norm, main = "Normalized ACF")
-  dotchart(ranef(obs_model)$Site[,1], labels = rownames(ranef(obs_model)$Site), main = "Site BLUPs")
-  dev.off()
-  
-  # C. Parallel Permutations (999 Runs)
-  obs_t_p2 <- summary(obs_model)$tTable["TreatmentPhase II", "t-value"]
-  obs_t_p3 <- summary(obs_model)$tTable["TreatmentPhase III", "t-value"]
-  
-  cat("Running permutations...\n")
-  null_dist <- foreach(i = 1:999, .combine = 'rbind', .packages = 'nlme') %dopar% {
-    p_data <- sub_data
-    p_data$Treatment <- sample(sub_data$Treatment)
-    p_mod <- try(lme(fixed = PC1 ~ Treatment, random = ~ 1 | Site/Exp_Date, 
-                     correlation = corAR1(form = ~ 1 | Site/Exp_Date),
-                     data = p_data, control = lmeControl(opt = "optim", msMaxIter = 100)), silent = TRUE)
-    if(!inherits(p_mod, "try-error")) {
-      return(c(p2 = summary(p_mod)$tTable["TreatmentPhase II", "t-value"],
-               p3 = summary(p_mod)$tTable["TreatmentPhase III", "t-value"]))
-    } else { return(c(p2 = NA, p3 = NA)) }
-  }
-  
-  # D. Extraction & Calculations
-  null_dist <- as.data.frame(null_dist)
-  valid_p2 <- na.omit(null_dist$p2); valid_p3 <- na.omit(null_dist$p3)
-  p_val_p2 <- (sum(abs(valid_p2) >= abs(obs_t_p2)) + 1) / (length(valid_p2) + 1)
-  p_val_p3 <- (sum(abs(valid_p3) >= abs(obs_t_p3)) + 1) / (length(valid_p3) + 1)
-  
-  phi_val <- as.numeric(coef(obs_model$modelStruct$corStruct, unconstrained = FALSE))
-  
-  perm_results_list[[current_band]] <- data.frame(
-    Bandwidth = current_band,
-    Observed_T_P2 = obs_t_p2,
-    Perm_P_P2 = p_val_p2,
-    Observed_T_P3 = obs_t_p3,
-    Perm_P_P3 = p_val_p3,
-    Phi_AR1 = phi_val,
-    Converged_Perms = length(valid_p2)
-  )
 }
 
-# =====================================================
-# 5. FDR CORRECTION & EXPORT
-# =====================================================
 stopCluster(cl)
 
-Final_Table <- bind_rows(perm_results_list) %>%
+# =====================================================
+# 5. FDR CORRECTION & FINAL TABLE
+# =====================================================
+Final_Results <- bind_rows(all_results_list) %>%
   mutate(
     Perm_P_P2_Adj = p.adjust(Perm_P_P2, method = "fdr"),
     Perm_P_P3_Adj = p.adjust(Perm_P_P3, method = "fdr")
   )
 
-write.csv(Final_Table, "Final_Acoustic_Analysis_Results.csv", row.names = FALSE)
-
 # =====================================================
-# STATISTICAL ASSUMPTION CHECK - ALL BANDWIDTHS
+# 6. DUAL-FILTER EFFECT SIZE PLOT
 # =====================================================
 
-assumption_results <- list()
-
-# Get the list of bandwidths actually processed in df_model
-all_bands <- unique(df_model$Bandwidth)
-
-for(current_band in all_bands) {
-  
-  # 1. Re-fit/Access the model for this band
-  # (Using the same structure as your main loop)
-  val_data <- df_model %>% filter(Bandwidth == current_band)
-  
-  val_mod <- try(lme(fixed = PC1 ~ Treatment, 
-                     random = ~ 1 | Site/Exp_Date, 
-                     correlation = corAR1(form = ~ 1 | Site/Exp_Date),
-                     data = val_data,
-                     control = lmeControl(opt = "optim")), silent = TRUE)
-  
-  if(inherits(val_mod, "try-error")) next
-  
-  # 2. Extract Normalized Residuals
-  res_norm <- residuals(val_mod, type = "normalized")
-  
-  # 3. Normality Test (Shapiro-Wilk)
-  # Note: Sampling 500 because shapiro.test limit is 5000, and smaller samples 
-  # are slightly less prone to the "Large N" p-value trap.
-  set.seed(123) # For reproducibility
-  shapiro_p <- shapiro.test(sample(res_norm, min(500, length(res_norm))))$p.value
-  
-  # 4. Homoscedasticity Test (Levene-style via Linear Model)
-  # We test if the absolute residuals are predicted by Treatment
-  abs_res <- abs(res_norm)
-  lev_mod <- lm(abs_res ~ Treatment, data = val_data)
-  levene_f <- summary(lev_mod)$fstatistic[1]
-  levene_p <- pf(summary(lev_mod)$fstatistic[1], 
-                 summary(lev_mod)$fstatistic[2], 
-                 summary(lev_mod)$fstatistic[3], lower.tail = FALSE)
-  
-  # 5. Store Results
-  assumption_results[[current_band]] <- data.frame(
-    Bandwidth = current_band,
-    Shapiro_P = shapiro_p,
-    Levene_F = levene_f,
-    Levene_P = levene_p,
-    N_Obs = length(res_norm)
-  )
-}
-
-# Combine and View
-Assumption_Table <- bind_rows(assumption_results)
-print(Assumption_Table)
-
-# Optional: Export to CSV for your records
-write.csv(Assumption_Table, "Model_Assumption_Checks_All_Bands.csv", row.names = FALSE)
-
-# =====================================================
-# 6. ORDERED PROFILE PLOT
-# =====================================================
-target_order <- c("2 - 5 kHz", "7 - 14 kHz", "1 - 10 kHz", 
-                  "10 - 20 kHz", "20 - 30 kHz", "30 - 40 kHz", "40 - 47 kHz")
-
-plot_data <- Final_Table %>%
-  select(Bandwidth, Observed_T_P2, Observed_T_P3) %>%
-  pivot_longer(cols = starts_with("Observed_T"), 
-               names_to = "Phase", 
-               values_to = "T_Stat") %>%
-  mutate(
-    Bandwidth = factor(Bandwidth, levels = target_order),
-    Phase = factor(Phase, 
-                   levels = c("Observed_T_P2", "Observed_T_P3"),
-                   labels = c("Phase II (Light On)", "Phase III (Recovery)"))
+# 1. Update Data Preparation with Dual Filter
+plot_data <- Final_Results %>%
+  pivot_longer(
+    cols = c(starts_with("Beta"), starts_with("SE"), ends_with("_Adj")),
+    names_to = "raw_name",
+    values_to = "val"
   ) %>%
-  filter(!is.na(Bandwidth))
-
-ggplot(plot_data, aes(x = Bandwidth, y = T_Stat, group = Phase, color = Phase)) +
-  geom_line(linewidth = 1.2) +
-  geom_point(size = 4) +
-  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
-  annotate("rect", xmin = -Inf, xmax = Inf, ymin = -2, ymax = 2, alpha = .1, fill = "gray50") + 
-  theme_bw() +
-  labs(y = "T-statistic (Effect size relative to Phase I)", x = "Frequency bandwidth") +
-  scale_color_manual(values = c("Phase II (Light On)" = "#E69F00", "Phase III (Recovery)" = "#56B4E9")) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1),
-        legend.position = "bottom",
-        panel.grid.minor = element_blank())
-
-ggsave("Acoustic_Response_Profile_Ordered.pdf", width = 10, height = 6)
-
-print("Workflow Complete. CSV, Plots, Diagnostics, and Model Summaries (txt) exported.")
-
-# =====================================================
-# QUICK EXTRACT: COEFFICIENTS & STANDARD ERRORS
-# =====================================================
-effect_sizes_list <- list()
-bands <- unique(df_model$Bandwidth)
-
-for(current_band in bands) {
-  sub_data <- df_model %>% filter(Bandwidth == current_band)
-  
-  # Fit the model (No permutations needed here)
-  obs_model <- try(lme(fixed = PC1 ~ Treatment, 
-                       random = ~ 1 | Site/Exp_Date, 
-                       correlation = corAR1(form = ~ 1 | Site/Exp_Date),
-                       data = sub_data,
-                       control = lmeControl(opt = "optim")), silent = TRUE)
-  
-  if(!inherits(obs_model, "try-error")) {
-    summ <- summary(obs_model)$tTable
-    
-    effect_sizes_list[[current_band]] <- data.frame(
-      Bandwidth = current_band,
-      # Phase II (Light On)
-      Beta_P2 = summ["TreatmentPhase II", "Value"],
-      SE_P2 = summ["TreatmentPhase II", "Std.Error"],
-      # Phase III (Recovery)
-      Beta_P3 = summ["TreatmentPhase III", "Value"],
-      SE_P3 = summ["TreatmentPhase III", "Std.Error"]
-    )
-  }
-}
-
-df_effects <- bind_rows(effect_sizes_list)
-print("Effect sizes extracted.")
-
-# =====================================================
-# PLOT WITH ERROR BARS (95% CI)
-# =====================================================
-library(ggplot2)
-library(tidyr)
-library(dplyr)
-
-# 1. Structure the data for plotting
-plot_data_ci <- df_effects %>%
-  pivot_longer(cols = -Bandwidth, 
-               names_to = c("Metric", "Phase"), 
-               names_sep = "_", 
-               values_to = "Value") %>%
-  pivot_wider(names_from = Metric, values_from = Value) %>%
   mutate(
-    # Calculate 95% Confidence Intervals (Beta +/- 1.96 * SE)
+    Phase = case_when(
+      str_detect(raw_name, "P2") ~ "Phase II (Light On)",
+      str_detect(raw_name, "P3") ~ "Phase III (Recovery)"
+    ),
+    Metric = case_when(
+      str_detect(raw_name, "Beta") ~ "Beta",
+      str_detect(raw_name, "SE") ~ "SE",
+      str_detect(raw_name, "Adj") ~ "P_Adj"
+    )
+  ) %>%
+  select(-raw_name) %>%
+  pivot_wider(names_from = Metric, values_from = val) %>%
+  mutate(
     CI_Lower = Beta - (1.96 * SE),
     CI_Upper = Beta + (1.96 * SE),
     
-    # Ordering and Labeling
+    # --- DUAL FILTER LOGIC ---
+    # Only TRUE if statistically significant AND magnitude > 0.2
+    is_biol_sig = (P_Adj < 0.05) & (abs(Beta) > 0.2),
+    sig_label = ifelse(is_biol_sig, "*", ""), 
+    
     Bandwidth = factor(Bandwidth, levels = c("2 - 5 kHz", "7 - 14 kHz", "1 - 10 kHz", 
                                              "10 - 20 kHz", "20 - 30 kHz", "30 - 40 kHz", "40 - 47 kHz")),
-    Phase = factor(Phase, levels = c("P2", "P3"), 
-                   labels = c("Phase II (Light On)", "Phase III (Recovery)"))
-  ) %>%
-  filter(!is.na(Bandwidth))
-
-# 2. Generate the High-Impact Plot
-ggplot(plot_data_ci, aes(x = Bandwidth, y = Beta, group = Phase, color = Phase)) +
-  # Add the Zero Line (Baseline)
-  geom_hline(yintercept = 0, linetype = "dashed", color = "black", linewidth = 0.8) +
-  
-  # Error Bars (Width 0.2 makes them look neat)
-  geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
-                width = 0.2, position = position_dodge(width = 0.3), linewidth = 0.8) +
-  
-  # The Points (Dodged slightly so they don't overlap)
-  geom_point(size = 4, position = position_dodge(width = 0.3)) +
-  
-  # Connect the dots (Optional: helps see the trend across bands)
-  geom_line(position = position_dodge(width = 0.3), alpha = 0.4) +
-  
-  # Styling
-  scale_color_manual(values = c("Phase II (Light On)" = "#E69F00", 
-                                "Phase III (Recovery)" = "#56B4E9")) +
-  theme_bw() +
-  labs(
-    y = "Estimated effect size (Model coefficient ± 95% CI)",
-    x = "Frequency bandwidth",
-    caption = ""
-  ) +
-  theme(
-    axis.text.x = element_text(angle = 45, hjust = 1, size = 18),
-    axis.title.y = element_text(size = 18),
-    legend.position = "top",
-    panel.grid.minor = element_blank()
+    Phase = factor(Phase, levels = c("Phase II (Light On)", "Phase III (Recovery)"))
   )
 
-ggsave("Acoustic_Response_with_CI.pdf", width = 15, height = 9)
-ggsave("Acoustic_Response_with_CI.jpeg", width = 15, height = 9)
+# 2. Generate the Figure
+ggplot(plot_data, aes(x = Bandwidth, y = Beta, group = interaction(Phase, Component), 
+                      color = Phase, shape = Component, alpha = Component)) +
+  
+  # A. SHADED NULL REGION (|Beta| < 0.2)
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = -0.2, ymax = 0.2, 
+           fill = "gray85", alpha = 0.4) + 
+  
+  # B. BASELINE
+  geom_hline(yintercept = 0, linetype = "dotted", color = "gray40", linewidth = 0.8) +
+  
+  # C. ERROR BARS
+  geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper, linetype = Component), 
+                width = 0.3, position = position_dodge(width = 0.6), linewidth = 0.8) +
+  
+  # D. LINES
+  geom_line(aes(linetype = Component), linewidth = 0.7, position = position_dodge(width = 0.6)) + 
+  
+  # E. POINTS
+  geom_point(size = 4, position = position_dodge(width = 0.6), stroke = 1.2) +
+  
+  # F. SIGNIFICANCE STARS (Only shown for Biological Significance)
+  geom_text(aes(y = ifelse(Beta > 0, CI_Upper + 0.08, CI_Lower - 0.08), label = sig_label),
+            position = position_dodge(width = 0.6), color = "black", size = 8, 
+            show.legend = FALSE, fontface = "bold") +
+  
+  # G. SCALES & THEME
+  scale_color_manual(values = c("Phase II (Light On)" = "#E69F00", 
+                                "Phase III (Recovery)" = "#56B4E9")) +
+  scale_shape_manual(values = c("PC1" = 16, "PC2" = 17)) +
+  scale_alpha_manual(values = c("PC1" = 1.0, "PC2" = 0.6)) + 
+  theme_bw() +
+  labs(y = "Estimated effect size (Beta ± 95% CI)", 
+       x = "Frequency bandwidth",
+       caption = "Shaded area: Small effect size (|Beta| < 0.2). * indicates FDR-corrected p < 0.05 AND |Beta| > 0.2.") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+        legend.position = "top", 
+        legend.box = "vertical",
+        panel.grid.minor = element_blank())
+
+ggsave("Acoustic_Response_Dual_PC_Full.pdf", width = 12, height = 8)
 
 ```
 
