@@ -532,39 +532,41 @@ for (s in sites) {
 
 ```
 # =====================================================
-# 0. LIBRARIES
+# 0. LIBRARIES & PARALLEL SETUP
 # =====================================================
 library(dplyr)
 library(stringr)
 library(lubridate)
-library(purrr)
 library(tidyr)
 library(ggplot2)
 library(nlme)
-library(broom)
-if(!require(moments)) install.packages("moments")
-library(moments)
+library(foreach)
+library(doParallel)
+library(caret)
+
+# Detect cores and setup cluster (using n-1 to keep PC responsive)
+n_cores <- parallel::detectCores() - 1
+cl <- makeCluster(n_cores)
+registerDoParallel(cl)
 
 # =====================================================
-# 1. SET WORKING DIRECTORY
+# 1. IMPORT & INITIAL PROCESSING
 # =====================================================
-dir_path <- "D:/Light pollution/Spectrally subset .txt files/2 - 4 kHz"
+dir_path <- "C:/Users/Administrador/OneDrive - McGill University/Light pollution and pond soundscapes/Feb 2026/Without NDSI & Anthro_Energy/All data"
 setwd(dir_path)
 
-# =====================================================
-# 2. IMPORT ALL TXT FILES
-# =====================================================
 txt_files <- list.files(path = ".", pattern = "\\.txt$", full.names = TRUE)
-print(paste("Files found:", length(txt_files)))
 
-merged_df <- do.call(rbind, lapply(txt_files, function(f) {
-  read.csv(f, stringsAsFactors = FALSE)
-}))
+df_global_raw <- lapply(txt_files, function(f) {
+  dat <- read.csv(f, stringsAsFactors = FALSE)
+  dat$source_txt <- basename(f) 
+  return(dat)
+}) %>% bind_rows()
 
 # =====================================================
-# 3. METADATA EXTRACTION & DATETIME
+# 2. METADATA & TREATMENT ASSIGNMENT
 # =====================================================
-merged_df <- merged_df %>%
+df_global_proc <- df_global_raw %>%
   mutate(
     Site = case_when(
       str_detect(filename, "EF")    ~ "EF",
@@ -573,270 +575,370 @@ merged_df <- merged_df %>%
       str_detect(filename, "UoBBG") ~ "UoBBG",
       TRUE                          ~ NA_character_
     ),
+    txt_low = tolower(source_txt),
+    Bandwidth = case_when(
+      str_detect(txt_low, "1-10khz")  ~ "1 - 10 kHz",
+      str_detect(txt_low, "10-20khz") ~ "10 - 20 kHz",
+      str_detect(txt_low, "20-30khz") ~ "20 - 30 kHz",
+      str_detect(txt_low, "30-40khz") ~ "30 - 40 kHz",
+      str_detect(txt_low, "40-47khz") ~ "40 - 47 kHz",
+      str_detect(txt_low, "7-14khz")  ~ "7 - 14 kHz",
+      str_detect(txt_low, "2-5khz")   ~ "2 - 5 kHz",
+      TRUE                            ~ "Other"
+    ),
     raw_ts = str_extract(filename, "\\d{8}_\\d{6}"),
     Datetime = as.POSIXct(raw_ts, format = "%Y%m%d_%H%M%S", tz = "Europe/London"),
-    Exp_Date = as.Date(Datetime),
-    File_ID = filename,
-    Bandwidth = "2.0 - 4.0 kHz"
+    Exp_Date = as.Date(Datetime)
   ) %>%
-  filter(!is.na(Site), !is.na(Datetime))
+  filter(!is.na(Site), !is.na(Datetime), Bandwidth != "Other")
 
-# =====================================================
-# 4. DEFINE TREATMENT ASSIGNMENT FUNCTION
-# =====================================================
 assign_treatment <- function(Site, Exp_Date) {
   if (Site == "OSP" && Exp_Date == as.Date("2025-08-25")) {
     data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
-               S = c("21:11", "22:11", "23:11"),
-               E = c("22:10", "23:10", "00:10"))
+               S = c("21:11", "22:11", "23:11"), E = c("22:10", "23:10", "00:10"))
   } else if (Site == "OSP" && Exp_Date == as.Date("2025-08-27")) {
     data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
-               S = c("21:07", "22:07", "23:07"),
-               E = c("22:06", "23:06", "00:06"))
+               S = c("21:07", "22:07", "23:07"), E = c("22:06", "23:06", "00:06"))
   } else if (Site == "OSP") {
     data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
-               S = c("21:08", "22:08", "23:08"),
-               E = c("22:07", "23:07", "00:07"))
+               S = c("21:08", "22:08", "23:08"), E = c("22:07", "23:07", "00:07"))
   } else if (Site == "UoBBG") {
     data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
-               S = c("21:04", "22:04", "23:04"),
-               E = c("22:03", "23:03", "00:03"))
+               S = c("21:04", "22:04", "23:04"), E = c("22:03", "23:03", "00:03"))
   } else if (Site == "FF") {
     data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
-               S = c("20:49", "21:49", "22:49"),
-               E = c("21:48", "22:48", "23:48"))
+               S = c("20:49", "21:49", "22:49"), E = c("21:48", "22:48", "23:48"))
   } else { 
     data.frame(Treatment = c("Phase I", "Phase II", "Phase III"),
-               S = c("20:51", "21:51", "22:51"),
-               E = c("21:50", "22:50", "23:50"))
+               S = c("20:51", "21:51", "22:51"), E = c("21:50", "22:50", "23:50"))
   }
 }
 
-# =====================================================
-# 5. ASSIGN TREATMENTS AND FILTER BY TIME WINDOW
-# =====================================================
-df_final <- merged_df %>%
+df_global_treated <- df_global_proc %>%
   rowwise() %>%
   mutate(phases = list(assign_treatment(Site, Exp_Date))) %>%
   ungroup() %>%
   tidyr::unnest(phases) %>%
   mutate(
     Start = as.POSIXct(paste(Exp_Date, S), format = "%Y-%m-%d %H:%M", tz = "Europe/London"),
-    End = as.POSIXct(ifelse(E < S,
-                            paste(Exp_Date + 1, E),
-                            paste(Exp_Date, E)),
+    End = as.POSIXct(ifelse(E < S, paste(Exp_Date + 1, E), paste(Exp_Date, E)),
                      format = "%Y-%m-%d %H:%M", tz = "Europe/London")
   ) %>%
   filter(Datetime >= Start & Datetime <= End) %>%
-  select(-S, -E) %>%
-  mutate(Treatment = factor(Treatment, levels = c("Phase I", "Phase II", "Phase III")))
-
-# Check the start/end times
-df_final %>% distinct(Site, Exp_Date, Treatment, Start, End) %>% print(n = 100)
-
-# =====================================================
-# 6. INITIAL PCA & OUTLIER DETECTION
-# =====================================================
-pca_vars <- c("NDSI", "Bio_Energy", "Anthro_Energy", "RMS_Mean", "ZCR_Mean", "MFCC_4", "MFCC_7", "MFCC_8")
-
-# Initial PCA
-pca_init <- prcomp(df_final[, pca_vars], center = TRUE, scale. = TRUE)
-df_init <- bind_cols(df_final, as.data.frame(pca_init$x))
-
-# Initial LME model
-model_init <- lme(PC1 ~ Treatment, random = ~ 1 | Site,
-                  correlation = corAR1(form = ~ 1 | Site/Exp_Date),
-                  weights = varIdent(form = ~ 1 | Site),
-                  data = df_init, control = lmeControl(opt = "optim"))
-
-df_init$norm_res <- residuals(model_init, type = "normalized")
-
-# Identify extreme outliers
-outlier_list <- df_init %>% filter(abs(norm_res) > 3) %>% pull(File_ID)
-df_cleaned <- df_init %>% filter(!File_ID %in% outlier_list)
-message(paste("Removed", length(outlier_list), "outliers. Proceeding with Final Model..."))
+  mutate(
+    Treatment = factor(Treatment, levels = c("Phase I", "Phase II", "Phase III")),
+    Bandwidth = as.factor(Bandwidth)
+  )
 
 # =====================================================
-# 7. FINAL PCA & MODEL (On Cleaned Data)
+# 3. PCA & OUTLIER DETECTION
 # =====================================================
-pca_final <- prcomp(df_cleaned[, pca_vars], center = TRUE, scale. = TRUE)
-df_final <- bind_cols(
-  df_cleaned %>% select(Datetime, File_ID, Bandwidth, Site, Exp_Date, Treatment),
-  as.data.frame(pca_final$x)
-)
+priority_vars <- c("ACI", "Bio_Energy", "Event_Count", "ZCR_Mean")
+spectral_vars <- c("ADI", "RMS_Mean", paste0("MFCC_", 1:13))
+pca_vars_full <- c(priority_vars, spectral_vars)
 
-final_model <- lme(
-  PC1 ~ Treatment, 
-  random = ~ 1 | Site,
-  correlation = corAR1(form = ~ 1 | Site/Exp_Date),
-  weights = varIdent(form = ~ 1 | Site), 
-  data = df_final,
-  control = lmeControl(opt = "optim")
-)
+df_scaled <- df_global_treated %>%
+  mutate(across(all_of(pca_vars_full), ~ as.numeric(scale(.))))
 
-# =====================================================
-# 7a. EXTRACT PCA LOADINGS AND TOP CONTRIBUTORS
-# =====================================================
+cor_matrix <- cor(df_scaled[, pca_vars_full], use="complete.obs")
+to_remove_indices <- findCorrelation(cor_matrix, cutoff=0.8)
+removed_names <- pca_vars_full[to_remove_indices]
+pca_vars <- setdiff(pca_vars_full, setdiff(removed_names, priority_vars))
 
-# Compute loadings from the final PCA
-pca_loadings <- pca_final$rotation[, 1:2]  # First 2 PCs
+pca_res <- prcomp(df_scaled[, pca_vars], center=FALSE, scale.=FALSE)
 
-# Convert to a tidy data frame using base R
-loadings_df <- data.frame(
-  Variable = rownames(pca_loadings),
-  PC1 = pca_loadings[, "PC1"],
-  PC2 = pca_loadings[, "PC2"],
-  stringsAsFactors = FALSE
-) %>%
-  pivot_longer(cols = starts_with("PC"), names_to = "PC", values_to = "Loading") %>%
-  mutate(AbsLoading = abs(Loading))
+pca_scores <- as.data.frame(pca_res$x[, 1:2])
+pca_scores$distance <- mahalanobis(pca_scores, colMeans(pca_scores), cov(pca_scores))
+cutoff <- qchisq(0.999, df=2) 
 
-# Identify top 3 contributing variables for each PC
-top_contributors <- loadings_df %>%
-  group_by(PC) %>%
-  slice_max(order_by = AbsLoading, n = 3) %>%
-  arrange(PC, -AbsLoading)
-
-# Print results
-top_contributors
-
-# Store first 2 PCs in df_final for plotting or further analysis
-df_final <- df_final %>%
-  mutate(PC1 = as.data.frame(pca_final$x)$PC1,
-         PC2 = as.data.frame(pca_final$x)$PC2)
+df_model <- cbind(df_scaled, PC1 = pca_res$x[,1], PC2 = pca_res$x[,2]) %>%
+  mutate(is_outlier = pca_scores$distance > cutoff) %>%
+  filter(!is_outlier) %>%
+  arrange(Site, Exp_Date, Bandwidth, Datetime)
 
 # =====================================================
-# 8. RESULTS & DIAGNOSTICS
+# 4. MAIN BANDWIDTH LOOP & PERMUTATION
 # =====================================================
-print(summary(final_model))
+bands <- unique(df_model$Bandwidth)
+perm_results_list <- list()
 
-df_final$final_res <- residuals(final_model, type = "normalized")
-par(mfrow = c(1, 2))
-qqnorm(df_final$final_res, main = "Final Q-Q Plot")
-qqline(df_final$final_res, col = "red")
-plot(final_model, resid(., type = "normalized") ~ fitted(.), main = "Final Residuals vs Fitted")
-par(mfrow = c(1, 1))
+# Initialize the text file for manuscript numbers
+cat("FULL MODEL SUMMARIES FOR MANUSCRIPT CITATION\n", file = "Model_Summaries_Full.txt", append = FALSE)
+cat("=====================================================\n\n", file = "Model_Summaries_Full.txt", append = TRUE)
 
-# Diagnostics
-res <- residuals(final_model, type = "pearson")
-fitted_vals <- predict(final_model)
-total_n <- length(res)
-
-df_data <- getData(final_model)
-X <- model.matrix(~ Treatment, data = df_data)
-hat_matrix_diag <- diag(X %*% solve(t(X) %*% X) %*% t(X))
-p_fixed <- length(fixef(final_model))
-cooks_d <- (res^2 / p_fixed) * (hat_matrix_diag / (1 - hat_matrix_diag))
-skew_val <- skewness(res)
-
-diagnostic_summary <- data.frame(
-  Metric = c("Total N", 
-             "Max Std. Residual", 
-             "Outliers (>3 SD) %",
-             "Skewness", 
-             "Max Cook's Distance",
-             "Influential Points (>4/N)"),
-  Value = c(total_n, 
-            round(max(res), 3), 
-            round((sum(abs(res) > 3) / total_n) * 100, 2),
-            round(skew_val, 3), 
-            round(max(cooks_d), 3),
-            sum(cooks_d > (4/total_n)))
-)
-print(diagnostic_summary)
+for(current_band in bands) {
+  cat("\n--- Processing Bandwidth:", current_band, "---\n")
+  sub_data <- df_model %>% filter(Bandwidth == current_band)
+  
+  # A. Observed Model
+  obs_model <- try(lme(
+    fixed = PC1 ~ Treatment,
+    random = ~ 1 | Site/Exp_Date, 
+    correlation = corAR1(form = ~ 1 | Site/Exp_Date),
+    data = sub_data,
+    control = lmeControl(opt = "optim", msMaxIter = 200)
+  ), silent = TRUE)
+  
+  if(inherits(obs_model, "try-error")) {
+    cat("Model failed for:", current_band, "\n")
+    next
+  }
+  
+  # EXPORT FULL SUMMARY TO TXT
+  cat("-----------------------------------------------------\n", file = "Model_Summaries_Full.txt", append = TRUE)
+  cat("BANDWIDTH:", current_band, "\n", file = "Model_Summaries_Full.txt", append = TRUE)
+  cat("-----------------------------------------------------\n", file = "Model_Summaries_Full.txt", append = TRUE)
+  sum_out <- capture.output(summary(obs_model))
+  cat(paste(sum_out, collapse = "\n"), file = "Model_Summaries_Full.txt", append = TRUE)
+  cat("\n\n", file = "Model_Summaries_Full.txt", append = TRUE)
+  
+  # B. High-Impact Diagnostics
+  png(paste0("Diag_", gsub(" ", "_", current_band), ".png"), width = 1000, height = 800)
+  par(mfrow = c(2, 2))
+  res_norm <- residuals(obs_model, type = "normalized")
+  qqnorm(res_norm, main = "Q-Q Plot"); qqline(res_norm, col="red")
+  plot(fitted(obs_model), res_norm, main = "Resid vs Fitted", pch=20, col=rgb(0,0,0,0.3))
+  abline(h=0, col="blue")
+  acf(res_norm, main = "Normalized ACF")
+  dotchart(ranef(obs_model)$Site[,1], labels = rownames(ranef(obs_model)$Site), main = "Site BLUPs")
+  dev.off()
+  
+  # C. Parallel Permutations (999 Runs)
+  obs_t_p2 <- summary(obs_model)$tTable["TreatmentPhase II", "t-value"]
+  obs_t_p3 <- summary(obs_model)$tTable["TreatmentPhase III", "t-value"]
+  
+  cat("Running permutations...\n")
+  null_dist <- foreach(i = 1:999, .combine = 'rbind', .packages = 'nlme') %dopar% {
+    p_data <- sub_data
+    p_data$Treatment <- sample(sub_data$Treatment)
+    p_mod <- try(lme(fixed = PC1 ~ Treatment, random = ~ 1 | Site/Exp_Date, 
+                     correlation = corAR1(form = ~ 1 | Site/Exp_Date),
+                     data = p_data, control = lmeControl(opt = "optim", msMaxIter = 100)), silent = TRUE)
+    if(!inherits(p_mod, "try-error")) {
+      return(c(p2 = summary(p_mod)$tTable["TreatmentPhase II", "t-value"],
+               p3 = summary(p_mod)$tTable["TreatmentPhase III", "t-value"]))
+    } else { return(c(p2 = NA, p3 = NA)) }
+  }
+  
+  # D. Extraction & Calculations
+  null_dist <- as.data.frame(null_dist)
+  valid_p2 <- na.omit(null_dist$p2); valid_p3 <- na.omit(null_dist$p3)
+  p_val_p2 <- (sum(abs(valid_p2) >= abs(obs_t_p2)) + 1) / (length(valid_p2) + 1)
+  p_val_p3 <- (sum(abs(valid_p3) >= abs(obs_t_p3)) + 1) / (length(valid_p3) + 1)
+  
+  phi_val <- as.numeric(coef(obs_model$modelStruct$corStruct, unconstrained = FALSE))
+  
+  perm_results_list[[current_band]] <- data.frame(
+    Bandwidth = current_band,
+    Observed_T_P2 = obs_t_p2,
+    Perm_P_P2 = p_val_p2,
+    Observed_T_P3 = obs_t_p3,
+    Perm_P_P3 = p_val_p3,
+    Phi_AR1 = phi_val,
+    Converged_Perms = length(valid_p2)
+  )
+}
 
 # =====================================================
-# 9. SAVE CLEANED DATA
+# 5. FDR CORRECTION & EXPORT
 # =====================================================
-write.csv(df_final, "merged_cleaned_with_PCA_and_Phase.csv", row.names = FALSE)
+stopCluster(cl)
+
+Final_Table <- bind_rows(perm_results_list) %>%
+  mutate(
+    Perm_P_P2_Adj = p.adjust(Perm_P_P2, method = "fdr"),
+    Perm_P_P3_Adj = p.adjust(Perm_P_P3, method = "fdr")
+  )
+
+write.csv(Final_Table, "Final_Acoustic_Analysis_Results.csv", row.names = FALSE)
 
 # =====================================================
-# 10. FINAL VISUALIZATION WITH SIGNIFICANCE STARS FACETED BY Exp_Date
+# STATISTICAL ASSUMPTION CHECK - ALL BANDWIDTHS
 # =====================================================
 
-library(broom)
+assumption_results <- list()
+
+# Get the list of bandwidths actually processed in df_model
+all_bands <- unique(df_model$Bandwidth)
+
+for(current_band in all_bands) {
+  
+  # 1. Re-fit/Access the model for this band
+  # (Using the same structure as your main loop)
+  val_data <- df_model %>% filter(Bandwidth == current_band)
+  
+  val_mod <- try(lme(fixed = PC1 ~ Treatment, 
+                     random = ~ 1 | Site/Exp_Date, 
+                     correlation = corAR1(form = ~ 1 | Site/Exp_Date),
+                     data = val_data,
+                     control = lmeControl(opt = "optim")), silent = TRUE)
+  
+  if(inherits(val_mod, "try-error")) next
+  
+  # 2. Extract Normalized Residuals
+  res_norm <- residuals(val_mod, type = "normalized")
+  
+  # 3. Normality Test (Shapiro-Wilk)
+  # Note: Sampling 500 because shapiro.test limit is 5000, and smaller samples 
+  # are slightly less prone to the "Large N" p-value trap.
+  set.seed(123) # For reproducibility
+  shapiro_p <- shapiro.test(sample(res_norm, min(500, length(res_norm))))$p.value
+  
+  # 4. Homoscedasticity Test (Levene-style via Linear Model)
+  # We test if the absolute residuals are predicted by Treatment
+  abs_res <- abs(res_norm)
+  lev_mod <- lm(abs_res ~ Treatment, data = val_data)
+  levene_f <- summary(lev_mod)$fstatistic[1]
+  levene_p <- pf(summary(lev_mod)$fstatistic[1], 
+                 summary(lev_mod)$fstatistic[2], 
+                 summary(lev_mod)$fstatistic[3], lower.tail = FALSE)
+  
+  # 5. Store Results
+  assumption_results[[current_band]] <- data.frame(
+    Bandwidth = current_band,
+    Shapiro_P = shapiro_p,
+    Levene_F = levene_f,
+    Levene_P = levene_p,
+    N_Obs = length(res_norm)
+  )
+}
+
+# Combine and View
+Assumption_Table <- bind_rows(assumption_results)
+print(Assumption_Table)
+
+# Optional: Export to CSV for your records
+write.csv(Assumption_Table, "Model_Assumption_Checks_All_Bands.csv", row.names = FALSE)
+
+# =====================================================
+# 6. ORDERED PROFILE PLOT
+# =====================================================
+target_order <- c("2 - 5 kHz", "7 - 14 kHz", "1 - 10 kHz", 
+                  "10 - 20 kHz", "20 - 30 kHz", "30 - 40 kHz", "40 - 47 kHz")
+
+plot_data <- Final_Table %>%
+  select(Bandwidth, Observed_T_P2, Observed_T_P3) %>%
+  pivot_longer(cols = starts_with("Observed_T"), 
+               names_to = "Phase", 
+               values_to = "T_Stat") %>%
+  mutate(
+    Bandwidth = factor(Bandwidth, levels = target_order),
+    Phase = factor(Phase, 
+                   levels = c("Observed_T_P2", "Observed_T_P3"),
+                   labels = c("Phase II (Light On)", "Phase III (Recovery)"))
+  ) %>%
+  filter(!is.na(Bandwidth))
+
+ggplot(plot_data, aes(x = Bandwidth, y = T_Stat, group = Phase, color = Phase)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 4) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = -2, ymax = 2, alpha = .1, fill = "gray50") + 
+  theme_bw() +
+  labs(y = "T-statistic (Effect size relative to Phase I)", x = "Frequency bandwidth") +
+  scale_color_manual(values = c("Phase II (Light On)" = "#E69F00", "Phase III (Recovery)" = "#56B4E9")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom",
+        panel.grid.minor = element_blank())
+
+ggsave("Acoustic_Response_Profile_Ordered.pdf", width = 10, height = 6)
+
+print("Workflow Complete. CSV, Plots, Diagnostics, and Model Summaries (txt) exported.")
+
+# =====================================================
+# QUICK EXTRACT: COEFFICIENTS & STANDARD ERRORS
+# =====================================================
+effect_sizes_list <- list()
+bands <- unique(df_model$Bandwidth)
+
+for(current_band in bands) {
+  sub_data <- df_model %>% filter(Bandwidth == current_band)
+  
+  # Fit the model (No permutations needed here)
+  obs_model <- try(lme(fixed = PC1 ~ Treatment, 
+                       random = ~ 1 | Site/Exp_Date, 
+                       correlation = corAR1(form = ~ 1 | Site/Exp_Date),
+                       data = sub_data,
+                       control = lmeControl(opt = "optim")), silent = TRUE)
+  
+  if(!inherits(obs_model, "try-error")) {
+    summ <- summary(obs_model)$tTable
+    
+    effect_sizes_list[[current_band]] <- data.frame(
+      Bandwidth = current_band,
+      # Phase II (Light On)
+      Beta_P2 = summ["TreatmentPhase II", "Value"],
+      SE_P2 = summ["TreatmentPhase II", "Std.Error"],
+      # Phase III (Recovery)
+      Beta_P3 = summ["TreatmentPhase III", "Value"],
+      SE_P3 = summ["TreatmentPhase III", "Std.Error"]
+    )
+  }
+}
+
+df_effects <- bind_rows(effect_sizes_list)
+print("Effect sizes extracted.")
+
+# =====================================================
+# PLOT WITH ERROR BARS (95% CI)
+# =====================================================
 library(ggplot2)
+library(tidyr)
 library(dplyr)
 
-# Ensure Exp_Date is a factor with the exact order you want
-df_final$Exp_Date <- factor(df_final$Exp_Date, levels = as.Date(c(
-  "2024-09-03", "2024-09-04", "2024-08-28", 
-  "2024-08-26", "2025-08-25", "2025-08-27"
-)))
+# 1. Structure the data for plotting
+plot_data_ci <- df_effects %>%
+  pivot_longer(cols = -Bandwidth, 
+               names_to = c("Metric", "Phase"), 
+               names_sep = "_", 
+               values_to = "Value") %>%
+  pivot_wider(names_from = Metric, values_from = Value) %>%
+  mutate(
+    # Calculate 95% Confidence Intervals (Beta +/- 1.96 * SE)
+    CI_Lower = Beta - (1.96 * SE),
+    CI_Upper = Beta + (1.96 * SE),
+    
+    # Ordering and Labeling
+    Bandwidth = factor(Bandwidth, levels = c("2 - 5 kHz", "7 - 14 kHz", "1 - 10 kHz", 
+                                             "10 - 20 kHz", "20 - 30 kHz", "30 - 40 kHz", "40 - 47 kHz")),
+    Phase = factor(Phase, levels = c("P2", "P3"), 
+                   labels = c("Phase II (Light On)", "Phase III (Recovery)"))
+  ) %>%
+  filter(!is.na(Bandwidth))
 
-# Custom facet order: bottom row = "2024-08-26", "2025-08-25", "2025-08-27"
-facet_levels_bottom <- as.Date(c("2024-08-26", "2025-08-25", "2025-08-27"))
-
-# Recalculate stars and plot data as before
-expdate_stats <- df_final %>%
-  group_by(Site, Exp_Date) %>%
-  do(tidy(lm(PC1 ~ Treatment, data = .))) %>%
-  filter(term == "TreatmentPhase II") %>%
-  mutate(label = case_when(
-    p.value < 0.001 ~ "***",
-    p.value < 0.01  ~ "**",
-    p.value < 0.05  ~ "*",
-    TRUE            ~ ""
-  ))
-
-plot_data_clean <- df_final %>%
-  group_by(Site, Exp_Date) %>%
-  mutate(baseline = mean(PC1[Treatment == "Phase I"], na.rm = TRUE),
-         PC1_Rel = PC1 - baseline) %>%
-  group_by(Site, Exp_Date, Treatment) %>%
-  summarise(est = mean(PC1_Rel), se = sd(PC1_Rel)/sqrt(n()), .groups = 'drop')
-
-stars_data <- plot_data_clean %>%
-  filter(Treatment == "Phase II") %>%
-  left_join(expdate_stats %>% select(Site, Exp_Date, label), by = c("Site", "Exp_Date")) %>%
-  mutate(y_pos = est + (1.96 * se) + 0.2)
-
-# Generate the plot
-p <- final_plot <- ggplot(plot_data_clean, aes(x = Treatment, y = est, group = Site)) +
-  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
-  geom_line(color = "grey70", linewidth = 1) + 
-  geom_errorbar(aes(ymin = est - 1.96*se, ymax = est + 1.96*se, color = Treatment), 
-                width = 0.15, linewidth = 0.8) +
-  geom_point(aes(color = Treatment), size = 3.5) +
-  geom_text(data = stars_data, aes(x = Treatment, y = y_pos, label = label), 
-            vjust = 0, size = 6, fontface = "bold", color = "black") +
-  facet_wrap(~Exp_Date, nrow = 2, ncol = 3) +
-  scale_color_manual(values = c("Phase I" = "black", "Phase II" = "#E69F00", "Phase III" = "#56B4E9")) +
+# 2. Generate the High-Impact Plot
+ggplot(plot_data_ci, aes(x = Bandwidth, y = Beta, group = Phase, color = Phase)) +
+  # Add the Zero Line (Baseline)
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", linewidth = 0.8) +
+  
+  # Error Bars (Width 0.2 makes them look neat)
+  geom_errorbar(aes(ymin = CI_Lower, ymax = CI_Upper), 
+                width = 0.2, position = position_dodge(width = 0.3), linewidth = 0.8) +
+  
+  # The Points (Dodged slightly so they don't overlap)
+  geom_point(size = 4, position = position_dodge(width = 0.3)) +
+  
+  # Connect the dots (Optional: helps see the trend across bands)
+  geom_line(position = position_dodge(width = 0.3), alpha = 0.4) +
+  
+  # Styling
+  scale_color_manual(values = c("Phase II (Light On)" = "#E69F00", 
+                                "Phase III (Recovery)" = "#56B4E9")) +
   theme_bw() +
   labs(
-    x = "Experimental phase",
-    y = "Change in PC1 (Relative to natural darkness)"
+    y = "Estimated effect size (Model coefficient ± 95% CI)",
+    x = "Frequency bandwidth",
+    caption = ""
   ) +
   theme(
-    legend.position = "none",
-    strip.background = element_rect(fill = "grey95"),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 18),
+    axis.title.y = element_text(size = 18),
+    legend.position = "top",
     panel.grid.minor = element_blank()
   )
 
-print(p)
-
-# =====================================================
-# 11. EXPORT FOR PUBLICATION (300 DPI PDF)
-# =====================================================
-ggsave(
-  filename = ("Modelling 2.0 - 4.0 kHz.pdf"),
-  plot = p,
-  device = "pdf",
-  width = 8, 
-  height = 7, 
-  units = "in",
-  dpi = 300
-)
-
-ggsave(
-  filename = ("Modelling 2.0 - 4.0 kHz.jpeg"),
-  plot = p,
-  device = "jpeg",
-  width = 8, 
-  height = 7, 
-  units = "in",
-  dpi = 300
-)
+ggsave("Acoustic_Response_with_CI.pdf", width = 15, height = 9)
+ggsave("Acoustic_Response_with_CI.jpeg", width = 15, height = 9)
 
 ```
 
